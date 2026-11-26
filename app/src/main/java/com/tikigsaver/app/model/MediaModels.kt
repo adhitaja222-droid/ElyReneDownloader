@@ -27,17 +27,19 @@ data class VideoQualityOption(
     val directFallbackUrl: String? = null,
     val isHd: Boolean = true,
     val upscaleTargetShort: Int = 0,
-    val isEnhanced: Boolean = false
+    val isEnhanced: Boolean = false,
+    val compressToShort: Int = 0
 ) {
     val resolutionSummary: String
         get() {
             val resPart = when {
                 width > 0 && height > 0 -> "${minOf(width, height)}p (${width}×${height})"
                 height > 0 -> "${height}p"
-                else -> if (isHd) "Resolusi Tinggi" else "Standar"
+                else -> if (isHd) "Resolusi Asli" else "Kompres (Ringan)"
             }
-            val fpsPart = if (fps > 0.0) " • ${fps.roundToInt()} FPS" else ""
+            val fpsPart = if (fps > 0.0 && compressToShort == 0) " • ${fps.roundToInt()} FPS" else ""
             val suffix = when {
+                compressToShort > 0 -> " • Kompres (Ringan)"
                 isEnhanced -> " • HD Upscale (FPS Asli Tetap)"
                 fileSizeBytes > 0L -> " • ${formatBytes(fileSizeBytes)}"
                 else -> ""

@@ -147,16 +147,42 @@ object FormatSelector {
                 .thenBy { it.fileSize }
         )
 
-        val normalOption = buildOption(
-            stream = normalStream ?: lightestStream,
-            isHd = false,
-            upscaleShort = 0,
-            customLabel = "Download Video"
-        )
+        val normalOption = if (normalStream != null) {
+            buildOption(
+                stream = normalStream,
+                isHd = false,
+                upscaleShort = 0,
+                customLabel = "Download Video"
+            )
+        } else {
+            val baseNormal = lightestStream ?: bestStream
+            val baseShort = baseNormal?.let { minOf(it.width, it.height) } ?: 0
+            if (baseShort > 576 && baseNormal != null) {
+                val (cw, ch) = scaleDimensions(baseNormal.width, baseNormal.height, 576)
+                buildOption(
+                    stream = baseNormal,
+                    isHd = false,
+                    upscaleShort = 0,
+                    customLabel = "Download Video"
+                ).copy(
+                    width = cw,
+                    height = ch,
+                    fileSizeBytes = 0L,
+                    compressToShort = 576
+                )
+            } else {
+                buildOption(
+                    stream = baseNormal,
+                    isHd = false,
+                    upscaleShort = 0,
+                    customLabel = "Download Video"
+                )
+            }
+        }
 
-        val hdUpscale = if (bestShort in 1..720) 1080 else 0
+        // HD: ALWAYS original resolution & FPS untouched (no compression, no FPS drop)
         return SelectedVideoOptions(
-            hd = buildOption(bestStream, true, hdUpscale, "Download Video HD"),
+            hd = buildOption(bestStream, true, 0, "Download Video HD"),
             normal = normalOption,
             ultra = null
         )

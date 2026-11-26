@@ -10,6 +10,7 @@ import android.provider.MediaStore
 import com.tikigsaver.app.model.DownloadKind
 import com.tikigsaver.app.model.MediaContent
 import com.tikigsaver.app.model.PhotoSlideItem
+import com.tikigsaver.app.model.Platform
 import com.tikigsaver.app.model.SavedMediaRecord
 import com.tikigsaver.app.model.VideoQualityOption
 import com.yausername.youtubedl_android.YoutubeDL
@@ -18,8 +19,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.net.URLEncoder
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -57,13 +60,26 @@ class DownloadRepository(
             val ytdlpResult = runCatching {
                 val req = YoutubeDLRequest(media.sourceUrl).apply {
                     addOption("-f", option.formatSpec)
-                    if (option.upscaleTargetShort > 0) {
-                        val t = option.upscaleTargetShort
-                        val vf = "scale=if(lte(iw\\,ih)\\,$t\\,-2):if(lte(iw\\,ih)\\,-2\\,$t):flags=lanczos,unsharp=5:5:0.6:5:5:0.0"
-                        addOption("--recode-video", "mp4")
-                        addOption("--postprocessor-args", "VideoConvertor:-vf $vf -q:v 2 -c:a copy -movflags +faststart")
-                    } else {
-                        addOption("--merge-output-format", "mp4")
+                    addOption("--user-agent", desktopUserAgent)
+                    if (media.platform == Platform.TIKTOK) {
+                        addOption("--referer", "https://www.tiktok.com/")
+                    }
+                    when {
+                        option.upscaleTargetShort > 0 -> {
+                            val t = option.upscaleTargetShort
+                            val vf = "scale=if(lte(iw\\,ih)\\,$t\\,-2):if(lte(iw\\,ih)\\,-2\\,$t):flags=lanczos,unsharp=5:5:0.6:5:5:0.0"
+                            addOption("--recode-video", "mp4")
+                            addOption("--postprocessor-args", "VideoConvertor:-vf $vf -q:v 2 -c:a copy -movflags +faststart")
+                        }
+                        option.compressToShort > 0 -> {
+                            val c = option.compressToShort
+                            val vf = "scale=if(lte(iw\\,ih)\\,$c\\,-2):if(lte(iw\\,ih)\\,-2\\,$c)"
+                            addOption("--recode-video", "mp4")
+                            addOption("--postprocessor-args", "VideoConvertor:-vf $vf -q:v 5 -c:a aac -b:a 96k -movflags +faststart")
+                        }
+                        else -> {
+                            addOption("--merge-output-format", "mp4")
+                        }
                     }
                     addOption("--no-playlist")
                     addOption("--no-mtime")
@@ -75,7 +91,7 @@ class DownloadRepository(
                 YoutubeDL.getInstance().execute(req, "vid_${UUID.randomUUID()}") { progress, eta, _ ->
                     val pct = progress.coerceIn(0f, 100f)
                     val etaText = if (eta > 0) " (${eta}s)" else ""
-                    val label = if (option.upscaleTargetShort > 0) "Memproses ${option.label}" else "Mengunduh ${option.label}"
+                    val label = if (option.upscaleTargetShort > 0 || option.compressToShort > 0) "Memproses ${option.label}" else "Mengunduh ${option.label}"
                     onProgress(pct, "$label: ${pct.toInt()}%$etaText")
                 }
             }
@@ -83,17 +99,37 @@ class DownloadRepository(
             var downloadedFile = tempDir.listFiles()
                 ?.firstOrNull { it.isFile && it.length() > 0 && !it.name.endsWith(".part") }
 
+            var fallbackErr: Throwable? = null
             if (downloadedFile == null && !option.directFallbackUrl.isNullOrBlank()) {
                 onProgress(15f, "Mengunduh via fallback stream...")
                 val fallbackTarget = File(tempDir, "${baseName}_$tag.mp4")
-                downloadDirectHttp(option.directFallbackUrl, fallbackTarget) { pct ->
-                    onProgress(pct, "Mengunduh ${option.label}: ${pct.toInt()}%")
+                val fbRes = runCatching {
+                    downloadDirectHttp(option.directFallbackUrl, fallbackTarget) { pct ->
+                        onProgress(pct, "Mengunduh ${option.label}: ${pct.toInt()}%")
+                    }
                 }
-                downloadedFile = fallbackTarget.takeIf { it.exists() && it.length() > 0 }
+                fallbackErr = fbRes.exceptionOrNull()
+                downloadedFile = fallbackTarget.takeIf { fbRes.isSuccess && it.exists() && it.length() > 0 }
+            }
+
+            // Fresh TikWM fallback if yt-dlp and directFallbackUrl both failed (e.g. HTTP 403)
+            if (downloadedFile == null && media.platform == Platform.TIKTOK) {
+                onProgress(20f, "Mengambil ulang stream alternatif...")
+                val tikwmUrl = fetchTikWmFreshUrl(media.sourceUrl, isHd = option.isHd, isAudio = false)
+                if (!tikwmUrl.isNullOrBlank()) {
+                    val tikwmTarget = File(tempDir, "${baseName}_$tag.mp4")
+                    val twRes = runCatching {
+                        downloadDirectHttp(tikwmUrl, tikwmTarget) { pct ->
+                            onProgress(pct, "Mengunduh ${option.label}: ${pct.toInt()}%")
+                        }
+                    }
+                    fallbackErr = twRes.exceptionOrNull()
+                    downloadedFile = tikwmTarget.takeIf { twRes.isSuccess && it.exists() && it.length() > 0 }
+                }
             }
 
             val finalFile = downloadedFile ?: return@withContext Result.failure(
-                ytdlpResult.exceptionOrNull() ?: IllegalStateException("File video gagal diunduh.")
+                fallbackErr ?: ytdlpResult.exceptionOrNull() ?: IllegalStateException("File video gagal diunduh.")
             )
 
             val verifiedSpecs = VideoSpecsVerifier.inspectVideoFile(finalFile)
@@ -150,6 +186,10 @@ class DownloadRepository(
                     addOption("-x")
                     addOption("--audio-format", "mp3")
                     addOption("--audio-quality", "0")
+                    addOption("--user-agent", desktopUserAgent)
+                    if (media.platform == Platform.TIKTOK) {
+                        addOption("--referer", "https://www.tiktok.com/")
+                    }
                     addOption("--no-playlist")
                     addOption("--no-mtime")
                     addOption("-o", outTemplate)
@@ -168,10 +208,25 @@ class DownloadRepository(
 
             if (downloadedFile == null && !media.mp3DirectUrl.isNullOrBlank()) {
                 val directFile = File(tempDir, "$baseName.mp3")
-                downloadDirectHttp(media.mp3DirectUrl, directFile) { pct ->
-                    onProgress(pct, "Mengunduh MP3: ${pct.toInt()}%")
+                val mp3Res = runCatching {
+                    downloadDirectHttp(media.mp3DirectUrl, directFile) { pct ->
+                        onProgress(pct, "Mengunduh MP3: ${pct.toInt()}%")
+                    }
                 }
-                downloadedFile = directFile.takeIf { it.exists() && it.length() > 0 }
+                downloadedFile = directFile.takeIf { mp3Res.isSuccess && it.exists() && it.length() > 0 }
+            }
+
+            if (downloadedFile == null && media.platform == Platform.TIKTOK) {
+                val tikwmMp3 = fetchTikWmFreshUrl(media.sourceUrl, isHd = false, isAudio = true)
+                if (!tikwmMp3.isNullOrBlank()) {
+                    val directFile = File(tempDir, "$baseName.mp3")
+                    val twRes = runCatching {
+                        downloadDirectHttp(tikwmMp3, directFile) { pct ->
+                            onProgress(pct, "Mengunduh MP3: ${pct.toInt()}%")
+                        }
+                    }
+                    downloadedFile = directFile.takeIf { twRes.isSuccess && it.exists() && it.length() > 0 }
+                }
             }
 
             val finalFile = downloadedFile ?: return@withContext Result.failure(
@@ -308,6 +363,27 @@ class DownloadRepository(
             onProgress(100f)
         }
     }
+
+    private fun fetchTikWmFreshUrl(sourceUrl: String, isHd: Boolean, isAudio: Boolean): String? = runCatching {
+        val encoded = URLEncoder.encode(sourceUrl, "UTF-8")
+        val req = Request.Builder()
+            .url("https://www.tikwm.com/api/?url=$encoded&hd=1")
+            .header("User-Agent", desktopUserAgent)
+            .build()
+        httpClient.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) return@use null
+            val root = JSONObject(resp.body?.string().orEmpty())
+            if (root.optInt("code", -1) != 0) return@use null
+            val data = root.optJSONObject("data") ?: return@use null
+            when {
+                isAudio -> data.optString("music").ifBlank {
+                    data.optJSONObject("music_info")?.optString("play").orEmpty()
+                }.ifBlank { null }
+                isHd -> data.optString("hdplay").ifBlank { data.optString("play") }.ifBlank { null }
+                else -> data.optString("play").ifBlank { data.optString("hdplay") }.ifBlank { null }
+            }
+        }
+    }.getOrNull()
 
     private fun copyToVault(sourceFile: File, savedName: String): String? = runCatching {
         val vaultDir = File(context.filesDir, "vault").apply { if (!exists()) mkdirs() }

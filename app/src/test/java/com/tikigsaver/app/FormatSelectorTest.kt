@@ -85,10 +85,12 @@ class FormatSelectorTest {
         )
 
         val selected = FormatSelector.selectVideoOptions(formats)
-        assertEquals(720, selected.normal.width)
-        assertEquals(1080, selected.hd.width)
-        assertEquals(1920, selected.hd.height)
+        assertEquals(576, selected.normal.width)
+        assertEquals(576, selected.normal.compressToShort)
+        assertEquals(720, selected.hd.width)
+        assertEquals(1280, selected.hd.height)
         assertEquals(60.0, selected.hd.fps, 0.01)
+        assertEquals(0, selected.hd.upscaleTargetShort)
         assertEquals(null, selected.ultra)
     }
 
