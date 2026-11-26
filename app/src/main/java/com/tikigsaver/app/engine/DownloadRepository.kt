@@ -404,11 +404,11 @@ class DownloadRepository(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val (collection, relativePath) = when (kind) {
                 DownloadKind.VIDEO_2K, DownloadKind.VIDEO_HD, DownloadKind.VIDEO_NORMAL ->
-                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI to "${Environment.DIRECTORY_DCIM}/ElyReneDownloader"
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI to "${Environment.DIRECTORY_DCIM}/Camera"
                 DownloadKind.MP3 ->
                     MediaStore.Audio.Media.EXTERNAL_CONTENT_URI to "${Environment.DIRECTORY_MUSIC}/ElyReneDownloader"
                 DownloadKind.IMAGE ->
-                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI to "${Environment.DIRECTORY_DCIM}/ElyReneDownloader"
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI to "${Environment.DIRECTORY_DCIM}/Camera"
             }
 
             val values = ContentValues().apply {
@@ -432,15 +432,32 @@ class DownloadRepository(
 
             values.clear()
             values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+            values.put(MediaStore.MediaColumns.DATE_MODIFIED, System.currentTimeMillis() / 1000L)
+            if (kind != DownloadKind.MP3) {
+                values.put(MediaStore.MediaColumns.DATE_TAKEN, System.currentTimeMillis())
+            }
             resolver.update(uri, values, null, null)
+            resolver.notifyChange(uri, null)
+
+            // Trigger MediaScanner on the resolved path so WhatsApp "Terbaru" indexes dimensions/duration immediately
+            runCatching {
+                resolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)?.use { c ->
+                    if (c.moveToFirst()) {
+                        val path = c.getString(0)
+                        if (!path.isNullOrBlank()) {
+                            MediaScannerConnection.scanFile(context, arrayOf(path), arrayOf(mimeType), null)
+                        }
+                    }
+                }
+            }
             return uri
         } else {
-            val dirType = when (kind) {
-                DownloadKind.VIDEO_2K, DownloadKind.VIDEO_HD, DownloadKind.VIDEO_NORMAL -> Environment.DIRECTORY_DCIM
-                DownloadKind.MP3 -> Environment.DIRECTORY_MUSIC
-                DownloadKind.IMAGE -> Environment.DIRECTORY_DCIM
+            val (dirType, subDir) = when (kind) {
+                DownloadKind.VIDEO_2K, DownloadKind.VIDEO_HD, DownloadKind.VIDEO_NORMAL -> Environment.DIRECTORY_DCIM to "Camera"
+                DownloadKind.MP3 -> Environment.DIRECTORY_MUSIC to "ElyReneDownloader"
+                DownloadKind.IMAGE -> Environment.DIRECTORY_DCIM to "Camera"
             }
-            val targetDir = File(Environment.getExternalStoragePublicDirectory(dirType), "ElyReneDownloader")
+            val targetDir = File(Environment.getExternalStoragePublicDirectory(dirType), subDir)
             if (!targetDir.exists()) targetDir.mkdirs()
             val targetFile = File(targetDir, displayName)
             sourceFile.copyTo(targetFile, overwrite = true)

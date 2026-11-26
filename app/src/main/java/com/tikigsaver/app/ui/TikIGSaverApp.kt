@@ -48,6 +48,7 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.VideoFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -593,6 +594,32 @@ private fun HistoryTab(
                             expanded = menuExpanded,
                             onDismissRequest = { menuExpanded = false }
                         ) {
+                            DropdownMenuItem(
+                                text = { Text("Bagikan") },
+                                leadingIcon = { Icon(Icons.Rounded.Share, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    val mime = when (item.kind) {
+                                        DownloadKind.VIDEO_2K, DownloadKind.VIDEO_HD, DownloadKind.VIDEO_NORMAL -> "video/*"
+                                        DownloadKind.MP3 -> "audio/*"
+                                        DownloadKind.IMAGE -> "image/*"
+                                    }
+                                    val vaultFile = item.vaultPath?.let { File(it) }?.takeIf { it.exists() && it.length() > 0 }
+                                    val shareUri = if (vaultFile != null) {
+                                        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", vaultFile)
+                                    } else {
+                                        item.fileUri
+                                    }
+                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                        type = mime
+                                        putExtra(Intent.EXTRA_STREAM, shareUri)
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    runCatching {
+                                        context.startActivity(Intent.createChooser(shareIntent, "Bagikan ke"))
+                                    }
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text("Copy Link") },
                                 leadingIcon = { Icon(Icons.Rounded.ContentCopy, contentDescription = null) },
