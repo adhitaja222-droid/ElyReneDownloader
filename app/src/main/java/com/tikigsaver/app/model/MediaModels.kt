@@ -88,6 +88,20 @@ data class SavedMediaRecord(
     val thumbnailUrl: String? = null,
     val sourceUrl: String = "",
     val vaultPath: String? = null,
+    val localThumbPath: String? = null,
+    val timestampMillis: Long = System.currentTimeMillis()
+)
+
+data class MyEditRecord(
+    val id: String,
+    val title: String,
+    val filePath: String,
+    val fileName: String,
+    val fileSizeBytes: Long,
+    val verifiedSpecs: String? = null,
+    val editInfo: String = "Edited",
+    val localThumbPath: String? = null,
+    val sourceUrl: String = "",
     val timestampMillis: Long = System.currentTimeMillis()
 )
 

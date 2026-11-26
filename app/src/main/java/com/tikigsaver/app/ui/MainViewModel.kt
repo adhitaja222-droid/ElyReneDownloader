@@ -10,8 +10,11 @@ import com.tikigsaver.app.engine.CookieStorage
 import com.tikigsaver.app.engine.DownloadRepository
 import com.tikigsaver.app.engine.MediaExtractorRepository
 import com.tikigsaver.app.engine.UrlUtils
+import com.tikigsaver.app.engine.VideoEditorRepository
+import com.tikigsaver.app.engine.VideoSpecsVerifier
 import com.tikigsaver.app.model.DownloadKind
 import com.tikigsaver.app.model.MediaContent
+import com.tikigsaver.app.model.MyEditRecord
 import com.tikigsaver.app.model.PhotoSlideItem
 import com.tikigsaver.app.model.Platform
 import com.tikigsaver.app.model.SavedMediaRecord
@@ -24,9 +27,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
+import java.util.UUID
 
 data class MainUiState(
     val urlInput: String = "",
@@ -40,9 +47,18 @@ data class MainUiState(
     val downloadedPhotoIndices: Set<Int> = emptySet(),
     val lastSuccessBanner: String? = null,
     val savedHistory: List<SavedMediaRecord> = emptyList(),
+    val myEdits: List<MyEditRecord> = emptyList(),
+    val isEditingVideo: Boolean = false,
     val hasInstagramCookies: Boolean = false,
     val isUpdatingYtDlp: Boolean = false,
-    val engineUpdateMessage: String? = null
+    val engineUpdateMessage: String? = null,
+    val isCheckingApkUpdate: Boolean = false,
+    val availableUpdateVersion: String? = null,
+    val availableUpdateNotes: String? = null,
+    val availableUpdateApkUrl: String? = null,
+    val isDownloadingApkUpdate: Boolean = false,
+    val apkDownloadProgress: Float = 0f,
+    val downloadedApkFile: File? = null
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -56,7 +72,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(
         MainUiState(
             hasInstagramCookies = cookieStorage.hasInstagramCookies(),
-            savedHistory = loadHistoryFromPrefs()
+            savedHistory = loadHistoryFromPrefs(),
+            myEdits = loadMyEditsFromPrefs()
         )
     )
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -76,6 +93,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 put("thumbnailUrl", r.thumbnailUrl ?: "")
                 put("sourceUrl", r.sourceUrl)
                 put("vaultPath", r.vaultPath ?: "")
+                put("localThumbPath", r.localThumbPath ?: "")
                 put("timestampMillis", r.timestampMillis)
             })
         }
@@ -99,6 +117,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 thumbnailUrl = o.optString("thumbnailUrl").ifBlank { null },
                 sourceUrl = o.optString("sourceUrl"),
                 vaultPath = o.optString("vaultPath").ifBlank { null },
+                localThumbPath = o.optString("localThumbPath").ifBlank { null },
                 timestampMillis = o.optLong("timestampMillis", System.currentTimeMillis())
             )
         }
@@ -135,6 +154,253 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (record.sourceUrl.isBlank()) return
         _uiState.update { it.copy(urlInput = record.sourceUrl, errorMessage = null) }
         analyzeCurrentUrl(record.sourceUrl)
+    }
+
+    private fun saveMyEditsToPrefs(list: List<MyEditRecord>) {
+        val arr = JSONArray()
+        list.forEach { e ->
+            arr.put(JSONObject().apply {
+                put("id", e.id)
+                put("title", e.title)
+                put("filePath", e.filePath)
+                put("fileName", e.fileName)
+                put("fileSizeBytes", e.fileSizeBytes)
+                put("verifiedSpecs", e.verifiedSpecs ?: "")
+                put("editInfo", e.editInfo)
+                put("localThumbPath", e.localThumbPath ?: "")
+                put("sourceUrl", e.sourceUrl)
+                put("timestampMillis", e.timestampMillis)
+            })
+        }
+        prefs.edit().putString("my_edits_json", arr.toString()).apply()
+    }
+
+    private fun loadMyEditsFromPrefs(): List<MyEditRecord> = runCatching {
+        val raw = prefs.getString("my_edits_json", null) ?: return emptyList()
+        val arr = JSONArray(raw)
+        (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            MyEditRecord(
+                id = o.optString("id"),
+                title = o.optString("title"),
+                filePath = o.optString("filePath"),
+                fileName = o.optString("fileName"),
+                fileSizeBytes = o.optLong("fileSizeBytes"),
+                verifiedSpecs = o.optString("verifiedSpecs").ifBlank { null },
+                editInfo = o.optString("editInfo", "Edited"),
+                localThumbPath = o.optString("localThumbPath").ifBlank { null },
+                sourceUrl = o.optString("sourceUrl"),
+                timestampMillis = o.optLong("timestampMillis", System.currentTimeMillis())
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    fun editAndSaveVideo(
+        record: SavedMediaRecord,
+        startMs: Long,
+        endMs: Long,
+        cropX: Float?,
+        cropY: Float?,
+        cropW: Float?,
+        cropH: Float?,
+        editLabel: String,
+        onDone: (Boolean, String) -> Unit
+    ) {
+        if (_uiState.value.isEditingVideo) return
+        val vaultFile = record.vaultPath?.let { File(it) }?.takeIf { it.exists() && it.length() > 0 }
+        val inputUri = if (vaultFile != null) Uri.fromFile(vaultFile) else record.fileUri
+        viewModelScope.launch {
+            _uiState.update { it.copy(isEditingVideo = true) }
+            val result = runCatching {
+                val app = getApplication<Application>()
+                val editDir = File(app.filesDir, "edits").apply { mkdirs() }
+                val outName = "${record.fileName.substringBeforeLast('.')}_edit_${System.currentTimeMillis() % 10000}.mp4"
+                val outFile = File(editDir, outName)
+                VideoEditorRepository.editVideo(
+                    context = app,
+                    inputUri = inputUri,
+                    outputFile = outFile,
+                    startMs = startMs,
+                    endMs = endMs,
+                    cropX = cropX,
+                    cropY = cropY,
+                    cropW = cropW,
+                    cropH = cropH
+                )
+                val specs = withContext(Dispatchers.IO) { VideoSpecsVerifier.inspectVideoFile(outFile) }
+                val thumbPath = VideoEditorRepository.extractThumbFile(
+                    outFile,
+                    File(File(app.filesDir, "thumbs"), "${outFile.nameWithoutExtension}_thumb.jpg")
+                )
+                MyEditRecord(
+                    id = UUID.randomUUID().toString(),
+                    title = record.title,
+                    filePath = outFile.absolutePath,
+                    fileName = outName,
+                    fileSizeBytes = outFile.length(),
+                    verifiedSpecs = specs,
+                    editInfo = editLabel,
+                    localThumbPath = thumbPath ?: record.localThumbPath,
+                    sourceUrl = record.sourceUrl
+                )
+            }
+            result.onSuccess { rec ->
+                _uiState.update { state ->
+                    val updated = listOf(rec) + state.myEdits
+                    saveMyEditsToPrefs(updated)
+                    state.copy(isEditingVideo = false, myEdits = updated)
+                }
+                onDone(true, "Hasil edit disimpan ke My Edit!")
+            }.onFailure { err ->
+                _uiState.update { it.copy(isEditingVideo = false) }
+                onDone(false, err.message ?: "Gagal menyimpan edit.")
+            }
+        }
+    }
+
+    fun saveEditToGallery(edit: MyEditRecord, onResult: (String) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val file = File(edit.filePath)
+            if (!file.exists()) {
+                withContext(Dispatchers.Main) { onResult("File edit tidak ditemukan.") }
+                return@launch
+            }
+            val res = runCatching {
+                downloader.saveToMediaStore(
+                    sourceFile = file,
+                    displayName = edit.fileName,
+                    mimeType = "video/mp4",
+                    kind = DownloadKind.VIDEO_HD
+                )
+            }
+            withContext(Dispatchers.Main) {
+                if (res.isSuccess) onResult("Disimpan ke Galeri (DCIM/Camera)!")
+                else onResult("Gagal menyimpan ke Galeri.")
+            }
+        }
+    }
+
+    fun removeEditItem(id: String) {
+        _uiState.update { state ->
+            state.myEdits.find { it.id == id }?.let { runCatching { File(it.filePath).delete() } }
+            val updated = state.myEdits.filterNot { it.id == id }
+            saveMyEditsToPrefs(updated)
+            state.copy(myEdits = updated)
+        }
+    }
+
+    fun clearAllEdits() {
+        _uiState.update { state ->
+            state.myEdits.forEach { runCatching { File(it.filePath).delete() } }
+            runCatching { File(getApplication<Application>().filesDir, "edits").deleteRecursively() }
+            saveMyEditsToPrefs(emptyList())
+            state.copy(myEdits = emptyList())
+        }
+    }
+
+    fun checkApkUpdate(currentVersion: String, onMessage: (String) -> Unit) {
+        if (_uiState.value.isCheckingApkUpdate) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isCheckingApkUpdate = true) }
+            val res = withContext(Dispatchers.IO) {
+                runCatching {
+                    val client = OkHttpClient()
+                    val req = Request.Builder()
+                        .url("https://api.github.com/repos/adhitaja222-droid/ElyReneDownloader/releases/latest")
+                        .header("User-Agent", "ElyReneDownloader")
+                        .build()
+                    client.newCall(req).execute().use { resp ->
+                        if (!resp.isSuccessful) return@use null
+                        val obj = JSONObject(resp.body?.string().orEmpty())
+                        val tag = obj.optString("tag_name").trimStart('v', 'V').trim()
+                        val notes = obj.optString("body").ifBlank { "Versi terbaru tersedia." }
+                        val assets = obj.optJSONArray("assets")
+                        var apkUrl = ""
+                        if (assets != null) {
+                            for (i in 0 until assets.length()) {
+                                val a = assets.optJSONObject(i) ?: continue
+                                val name = a.optString("name")
+                                if (name.endsWith(".apk", ignoreCase = true)) {
+                                    apkUrl = a.optString("browser_download_url")
+                                    break
+                                }
+                            }
+                        }
+                        Triple(tag, notes, apkUrl)
+                    }
+                }.getOrNull()
+            }
+            _uiState.update { it.copy(isCheckingApkUpdate = false) }
+            if (res != null && res.first.isNotBlank() && res.first != currentVersion && res.third.isNotBlank()) {
+                _uiState.update {
+                    it.copy(
+                        availableUpdateVersion = res.first,
+                        availableUpdateNotes = res.second,
+                        availableUpdateApkUrl = res.third,
+                        downloadedApkFile = null
+                    )
+                }
+            } else {
+                onMessage("Aplikasi sudah menggunakan versi terbaru (V $currentVersion).")
+            }
+        }
+    }
+
+    fun dismissApkUpdate() {
+        _uiState.update {
+            it.copy(
+                availableUpdateVersion = null,
+                availableUpdateNotes = null,
+                availableUpdateApkUrl = null,
+                isDownloadingApkUpdate = false,
+                apkDownloadProgress = 0f,
+                downloadedApkFile = null
+            )
+        }
+    }
+
+    fun startApkUpdateDownload() {
+        val url = _uiState.value.availableUpdateApkUrl ?: return
+        if (_uiState.value.isDownloadingApkUpdate) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isDownloadingApkUpdate = true, apkDownloadProgress = 0f) }
+            val outFile = withContext(Dispatchers.IO) {
+                runCatching {
+                    val dest = File(getApplication<Application>().cacheDir, "elyrene_update.apk")
+                    val client = OkHttpClient.Builder().followRedirects(true).build()
+                    val req = Request.Builder().url(url).build()
+                    client.newCall(req).execute().use { resp ->
+                        if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
+                        val body = resp.body ?: throw IllegalStateException("Empty body")
+                        val total = body.contentLength()
+                        body.byteStream().use { input ->
+                            FileOutputStream(dest).use { out ->
+                                val buf = ByteArray(16 * 1024)
+                                var readSum = 0L
+                                while (true) {
+                                    val r = input.read(buf)
+                                    if (r == -1) break
+                                    out.write(buf, 0, r)
+                                    readSum += r
+                                    if (total > 0) {
+                                        val pct = (readSum * 100f / total).coerceIn(0f, 100f)
+                                        _uiState.update { it.copy(apkDownloadProgress = pct) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    dest
+                }.getOrNull()
+            }
+            _uiState.update {
+                it.copy(
+                    isDownloadingApkUpdate = false,
+                    apkDownloadProgress = if (outFile != null) 100f else 0f,
+                    downloadedApkFile = outFile
+                )
+            }
+        }
     }
 
     fun onUrlChanged(newUrl: String) {

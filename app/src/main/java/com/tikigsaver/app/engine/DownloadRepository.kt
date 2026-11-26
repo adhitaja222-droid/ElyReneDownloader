@@ -140,6 +140,11 @@ class DownloadRepository(
                 else -> DownloadKind.VIDEO_NORMAL
             }
             val vaultPath = copyToVault(finalFile, savedName)
+            val thumbDir = File(context.filesDir, "thumbs")
+            val localThumbPath = VideoEditorRepository.extractThumbFile(
+                finalFile,
+                File(thumbDir, "${finalFile.nameWithoutExtension}_thumb.jpg")
+            )
             val uri = saveToMediaStore(
                 sourceFile = finalFile,
                 displayName = savedName,
@@ -159,7 +164,8 @@ class DownloadRepository(
                     verifiedSpecs = verifiedSpecs,
                     thumbnailUrl = media.thumbnailUrl,
                     sourceUrl = media.sourceUrl,
-                    vaultPath = vaultPath
+                    vaultPath = vaultPath,
+                    localThumbPath = localThumbPath
                 )
             )
         } catch (e: Exception) {
@@ -317,7 +323,8 @@ class DownloadRepository(
                     verifiedSpecs = verified,
                     thumbnailUrl = photo.url,
                     sourceUrl = media.sourceUrl,
-                    vaultPath = vaultPath
+                    vaultPath = vaultPath,
+                    localThumbPath = if (!isVideo) vaultPath else null
                 )
             )
         } catch (e: Exception) {
@@ -392,7 +399,7 @@ class DownloadRepository(
         target.absolutePath
     }.getOrNull()
 
-    private fun saveToMediaStore(
+    internal fun saveToMediaStore(
         sourceFile: File,
         displayName: String,
         mimeType: String,
