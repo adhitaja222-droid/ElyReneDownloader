@@ -1,6 +1,10 @@
 package com.tikigsaver.app.ui
 
 import android.content.Intent
+import android.media.MediaPlayer
+import android.net.Uri
+import android.widget.MediaController
+import android.widget.VideoView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
@@ -27,6 +31,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Clear
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Delete
@@ -38,6 +43,8 @@ import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Login
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
@@ -65,6 +72,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -86,6 +94,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
 import com.tikigsaver.app.EngineInitState
@@ -446,6 +457,14 @@ private fun HistoryTab(
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
+    var activeMedia by remember { mutableStateOf<SavedMediaRecord?>(null) }
+
+    activeMedia?.let { item ->
+        InAppMediaPlayerDialog(
+            item = item,
+            onDismiss = { activeMedia = null }
+        )
+    }
 
     if (history.isEmpty()) {
         Box(
@@ -493,22 +512,7 @@ private fun HistoryTab(
             var menuExpanded by remember { mutableStateOf(false) }
 
             fun openMedia() {
-                val mime = when (item.kind) {
-                    DownloadKind.VIDEO_2K, DownloadKind.VIDEO_HD, DownloadKind.VIDEO_NORMAL -> "video/*"
-                    DownloadKind.MP3 -> "audio/*"
-                    DownloadKind.IMAGE -> "image/*"
-                }
-                val vaultFile = item.vaultPath?.let { File(it) }?.takeIf { it.exists() && it.length() > 0 }
-                val targetUri = if (vaultFile != null) {
-                    FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", vaultFile)
-                } else {
-                    item.fileUri
-                }
-                val intent = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(targetUri, mime)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-                runCatching { context.startActivity(intent) }
+                activeMedia = item
             }
 
             Card(
@@ -631,6 +635,141 @@ private fun formatRelativeDate(ts: Long): String {
         diffSec < 3600 -> "${diffSec / 60} menit lalu"
         diffSec < 86400 -> "${diffSec / 3600} jam lalu"
         else -> SimpleDateFormat("d MMMM yyyy, HH:mm", Locale("id", "ID")).format(Date(ts))
+    }
+}
+
+@Composable
+private fun InAppMediaPlayerDialog(
+    item: SavedMediaRecord,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val vaultFile = remember(item.id) {
+        item.vaultPath?.let { File(it) }?.takeIf { it.exists() && it.length() > 0 }
+    }
+    val targetUri: Uri = remember(item.id) {
+        if (vaultFile != null) {
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", vaultFile)
+        } else {
+            item.fileUri
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            when (item.kind) {
+                DownloadKind.IMAGE -> {
+                    AsyncImage(
+                        model = vaultFile ?: item.fileUri,
+                        contentDescription = item.title,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                DownloadKind.MP3 -> {
+                    var isPlaying by remember { mutableStateOf(true) }
+                    val player = remember(item.id) {
+                        MediaPlayer().apply {
+                            runCatching {
+                                setDataSource(context, targetUri)
+                                prepare()
+                                start()
+                                setOnCompletionListener { isPlaying = false }
+                            }
+                        }
+                    }
+                    DisposableEffect(item.id) {
+                        onDispose {
+                            runCatching {
+                                if (player.isPlaying) player.stop()
+                                player.release()
+                            }
+                        }
+                    }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        if (!item.thumbnailUrl.isNullOrBlank()) {
+                            AsyncImage(
+                                model = item.thumbnailUrl,
+                                contentDescription = item.title,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(180.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                            )
+                        }
+                        Text(
+                            text = item.title.ifBlank { item.fileName },
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Button(
+                            onClick = {
+                                if (player.isPlaying) {
+                                    player.pause()
+                                    isPlaying = false
+                                } else {
+                                    player.start()
+                                    isPlaying = true
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                contentDescription = null
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (isPlaying) "Jeda Audio" else "Putar Audio", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+                else -> {
+                    AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory = { ctx ->
+                            VideoView(ctx).apply {
+                                val controller = MediaController(ctx)
+                                controller.setAnchorView(this)
+                                setMediaController(controller)
+                                setVideoURI(targetUri)
+                                setOnPreparedListener { mp ->
+                                    mp.isLooping = true
+                                    start()
+                                }
+                            }
+                        }
+                    )
+                }
+            }
+
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(50))
+            ) {
+                Icon(Icons.Rounded.Close, contentDescription = "Tutup", tint = Color.White)
+            }
+        }
     }
 }
 

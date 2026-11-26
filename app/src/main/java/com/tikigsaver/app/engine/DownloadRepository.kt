@@ -323,20 +323,27 @@ class DownloadRepository(
         kind: DownloadKind
     ): Uri {
         val resolver = context.contentResolver
+        val nowMs = System.currentTimeMillis()
+        val nowSec = nowMs / 1000L
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val (collection, relativePath) = when (kind) {
                 DownloadKind.VIDEO_2K, DownloadKind.VIDEO_HD, DownloadKind.VIDEO_NORMAL ->
-                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI to "${Environment.DIRECTORY_MOVIES}/ElyReneDownloader"
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI to "${Environment.DIRECTORY_DCIM}/ElyReneDownloader"
                 DownloadKind.MP3 ->
                     MediaStore.Audio.Media.EXTERNAL_CONTENT_URI to "${Environment.DIRECTORY_MUSIC}/ElyReneDownloader"
                 DownloadKind.IMAGE ->
-                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI to "${Environment.DIRECTORY_PICTURES}/ElyReneDownloader"
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI to "${Environment.DIRECTORY_DCIM}/ElyReneDownloader"
             }
 
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
                 put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
                 put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                put(MediaStore.MediaColumns.DATE_ADDED, nowSec)
+                put(MediaStore.MediaColumns.DATE_MODIFIED, nowSec)
+                if (kind != DownloadKind.MP3) {
+                    put(MediaStore.MediaColumns.DATE_TAKEN, nowMs)
+                }
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
 
@@ -353,11 +360,11 @@ class DownloadRepository(
             return uri
         } else {
             val dirType = when (kind) {
-                DownloadKind.VIDEO_2K, DownloadKind.VIDEO_HD, DownloadKind.VIDEO_NORMAL -> Environment.DIRECTORY_MOVIES
+                DownloadKind.VIDEO_2K, DownloadKind.VIDEO_HD, DownloadKind.VIDEO_NORMAL -> Environment.DIRECTORY_DCIM
                 DownloadKind.MP3 -> Environment.DIRECTORY_MUSIC
-                DownloadKind.IMAGE -> Environment.DIRECTORY_PICTURES
+                DownloadKind.IMAGE -> Environment.DIRECTORY_DCIM
             }
-            val targetDir = File(Environment.getExternalStoragePublicDirectory(dirType), "TikIG Saver")
+            val targetDir = File(Environment.getExternalStoragePublicDirectory(dirType), "ElyReneDownloader")
             if (!targetDir.exists()) targetDir.mkdirs()
             val targetFile = File(targetDir, displayName)
             sourceFile.copyTo(targetFile, overwrite = true)

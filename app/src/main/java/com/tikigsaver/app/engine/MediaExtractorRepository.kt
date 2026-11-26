@@ -337,11 +337,13 @@ class MediaExtractorRepository(
 
                 val hdUrl = data.str("hdplay")
                 val normalUrl = data.str("play")
+                val hdSize = data.long("hd_size")
+                val normalSize = data.long("size")
                 val hdOption = if (hdUrl.isNotBlank() && photos.isEmpty()) {
                     VideoQualityOption(
                         label = "Download Video HD",
                         formatSpec = "bestvideo+bestaudio/best",
-                        fileSizeBytes = data.long("hd_size"),
+                        fileSizeBytes = hdSize,
                         directFallbackUrl = hdUrl,
                         isHd = true
                     )
@@ -349,9 +351,9 @@ class MediaExtractorRepository(
 
                 val normalOption = if (normalUrl.isNotBlank() && photos.isEmpty()) {
                     VideoQualityOption(
-                        label = "Download Video Normal",
-                        formatSpec = "best[height<=720]/best",
-                        fileSizeBytes = data.long("size"),
+                        label = "Download Video",
+                        formatSpec = "bestvideo[height<=576]+bestaudio/best[height<=576]/best[height<=720]/best[height<=720]/best",
+                        fileSizeBytes = if (hdSize > 0L && normalSize >= hdSize) 0L else normalSize,
                         directFallbackUrl = normalUrl,
                         isHd = false
                     )

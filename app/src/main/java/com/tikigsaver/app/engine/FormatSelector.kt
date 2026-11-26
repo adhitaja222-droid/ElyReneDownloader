@@ -141,8 +141,14 @@ object FormatSelector {
                 .thenBy { it.tbr }
         )
 
+        val lightestStream = videoStreams.minWithOrNull(
+            compareBy<ParsedFormat> { it.width.toLong() * it.height.toLong() }
+                .thenBy { it.tbr }
+                .thenBy { it.fileSize }
+        )
+
         val normalOption = buildOption(
-            stream = normalStream ?: bestStream,
+            stream = normalStream ?: lightestStream,
             isHd = false,
             upscaleShort = 0,
             customLabel = "Download Video"
