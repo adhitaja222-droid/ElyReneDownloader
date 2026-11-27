@@ -2,5 +2,7 @@
 <paths>
     <cache-path name="cache" path="." />
     <files-path name="vault" path="vault/" />
+    <files-path name="edits" path="edits/" />
+    <files-path name="thumbs" path="thumbs/" />
     <external-path name="external" path="." />
 </paths>

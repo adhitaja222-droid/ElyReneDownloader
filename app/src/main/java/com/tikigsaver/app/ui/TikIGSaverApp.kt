@@ -36,6 +36,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
@@ -44,6 +45,7 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Link
@@ -906,6 +908,14 @@ private fun MyEditTab(
     onClearAll: () -> Unit
 ) {
     val context = LocalContext.current
+    var activeEdit by remember { mutableStateOf<SavedMediaRecord?>(null) }
+
+    activeEdit?.let { item ->
+        InAppMediaPlayerDialog(
+            item = item,
+            onDismiss = { activeEdit = null }
+        )
+    }
 
     if (edits.isEmpty()) {
         Box(
@@ -957,7 +967,25 @@ private fun MyEditTab(
             Card(
                 shape = RoundedCornerShape(14.dp),
                 colors = CardDefaults.cardColors(containerColor = Color.White),
-                border = BorderStroke(1.dp, CardBorder)
+                border = BorderStroke(1.dp, CardBorder),
+                modifier = Modifier.clickable {
+                    if (editFile.exists()) {
+                        activeEdit = SavedMediaRecord(
+                            id = edit.id,
+                            title = edit.title,
+                            kind = DownloadKind.VIDEO_HD,
+                            platform = com.tikigsaver.app.model.Platform.TIKTOK,
+                            fileUri = Uri.fromFile(editFile),
+                            fileName = edit.fileName,
+                            fileSizeBytes = edit.fileSizeBytes,
+                            verifiedSpecs = edit.verifiedSpecs,
+                            localThumbPath = edit.localThumbPath,
+                            sourceUrl = edit.sourceUrl,
+                            vaultPath = edit.filePath,
+                            timestampMillis = edit.timestampMillis
+                        )
+                    }
+                }
             ) {
                 Row(
                     modifier = Modifier
@@ -1038,15 +1066,15 @@ private fun MyEditTab(
                                 onClick = {
                                     menuExpanded = false
                                     if (editFile.exists()) {
-                                        val uri = FileProvider.getUriForFile(
-                                            context, "${context.packageName}.fileprovider", editFile
-                                        )
-                                        val intent = Intent(Intent.ACTION_SEND).apply {
-                                            type = "video/*"
-                                            putExtra(Intent.EXTRA_STREAM, uri)
-                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                        }
                                         runCatching {
+                                            val uri = FileProvider.getUriForFile(
+                                                context, "${context.packageName}.fileprovider", editFile
+                                            )
+                                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                                type = "video/*"
+                                                putExtra(Intent.EXTRA_STREAM, uri)
+                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            }
                                             context.startActivity(Intent.createChooser(intent, "Bagikan ke"))
                                         }
                                     }
@@ -1064,19 +1092,19 @@ private fun MyEditTab(
                                 onClick = {
                                     menuExpanded = false
                                     if (editFile.exists()) {
-                                        val uri = FileProvider.getUriForFile(
-                                            context, "${context.packageName}.fileprovider", editFile
-                                        )
-                                        val waIntent = Intent(Intent.ACTION_SEND).apply {
-                                            type = "video/*"
-                                            putExtra(Intent.EXTRA_STREAM, uri)
-                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                            setPackage("com.whatsapp")
-                                        }
                                         runCatching {
-                                            context.startActivity(waIntent)
-                                        }.onFailure {
+                                            val uri = FileProvider.getUriForFile(
+                                                context, "${context.packageName}.fileprovider", editFile
+                                            )
+                                            val waIntent = Intent(Intent.ACTION_SEND).apply {
+                                                type = "video/*"
+                                                putExtra(Intent.EXTRA_STREAM, uri)
+                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                                setPackage("com.whatsapp")
+                                            }
                                             runCatching {
+                                                context.startActivity(waIntent)
+                                            }.onFailure {
                                                 context.startActivity(
                                                     Intent.createChooser(
                                                         Intent(Intent.ACTION_SEND).apply {
@@ -1124,6 +1152,9 @@ private fun SettingsTab(
     onRetryInit: () -> Unit,
     onCheckUpdate: () -> Unit
 ) {
+    var versionExpanded by remember { mutableStateOf(false) }
+    var infoExpanded by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1131,161 +1162,202 @@ private fun SettingsTab(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // ── VERSI ──────────────────────────────────────────────────────────
-        Text(
-            "Versi",
-            fontWeight = FontWeight.ExtraBold,
-            fontSize = 15.sp,
-            color = SlateDark
-        )
+        // ── VERSI (Expandable) ─────────────────────────────────────────────
         Card(
             shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(containerColor = Color.White),
-            border = BorderStroke(1.dp, CardBorder)
+            border = BorderStroke(1.dp, CardBorder),
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { versionExpanded = !versionExpanded }
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
-                        Text(
-                            "ElyReneDownloader",
-                            fontWeight = FontWeight.Bold,
-                            color = SlateDark
-                        )
-                        Text(
-                            "V ${BuildConfig.VERSION_NAME}",
-                            fontSize = 13.sp,
-                            color = SlateMuted
-                        )
-                    }
-                    Button(
-                        onClick = onCheckUpdate,
-                        enabled = !uiState.isCheckingApkUpdate,
-                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        if (uiState.isCheckingApkUpdate) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp,
-                                color = Color.White
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text("Memeriksa...", fontSize = 12.sp)
-                        } else {
-                            Icon(
-                                Icons.Rounded.SystemUpdate,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                "CEK UPDATE APK",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        Spacer(Modifier.height(4.dp))
-
-        // ── INFORMASI ──────────────────────────────────────────────────────
-        Text(
-            "Informasi",
-            fontWeight = FontWeight.ExtraBold,
-            fontSize = 15.sp,
-            color = SlateDark
-        )
-        Card(
-            shape = RoundedCornerShape(14.dp),
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            border = BorderStroke(1.dp, CardBorder)
-        ) {
-            Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    "Engine Downloader (yt-dlp + FFmpeg)",
-                    fontWeight = FontWeight.Bold,
-                    color = SlateDark
-                )
-                val statusLabel = when (engineState) {
-                    EngineInitState.Loading -> "Sedang inisialisasi..."
-                    EngineInitState.Ready -> "✅ Aktif & Siap (On-Device)"
-                    is EngineInitState.Error -> "❌ Error: ${engineState.message}"
-                }
-                Text(statusLabel, fontSize = 12.5.sp, color = SlateMuted)
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = onUpdateYtDlp,
-                        enabled = !uiState.isUpdatingYtDlp && engineState is EngineInitState.Ready,
-                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        if (uiState.isUpdatingYtDlp) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp,
-                                color = Color.White
-                            )
-                        } else {
-                            Icon(
-                                Icons.Rounded.Refresh,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                        Spacer(Modifier.width(6.dp))
-                        Text("Update yt-dlp", fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
-                    }
-
-                    if (engineState is EngineInitState.Error) {
-                        OutlinedButton(onClick = onRetryInit, shape = RoundedCornerShape(8.dp)) {
-                            Text("Inisialisasi Ulang", fontSize = 12.5.sp)
-                        }
-                    }
-                }
-
-                uiState.engineUpdateMessage?.let { msg ->
                     Text(
-                        msg,
-                        fontSize = 12.sp,
-                        color = EmeraldPrimary,
-                        fontWeight = FontWeight.Medium
+                        text = "Versi",
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 15.sp,
+                        color = SlateDark
+                    )
+                    Icon(
+                        imageVector = if (versionExpanded) Icons.Rounded.ExpandMore else Icons.Rounded.ChevronRight,
+                        contentDescription = if (versionExpanded) "Tutup" else "Buka",
+                        tint = SlateMuted
                     )
                 }
+
+                AnimatedVisibility(visible = versionExpanded) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    "ElyReneDownloader",
+                                    fontWeight = FontWeight.Bold,
+                                    color = SlateDark
+                                )
+                                Text(
+                                    "V ${BuildConfig.VERSION_NAME}",
+                                    fontSize = 13.sp,
+                                    color = SlateMuted
+                                )
+                            }
+                            Button(
+                                onClick = onCheckUpdate,
+                                enabled = !uiState.isCheckingApkUpdate,
+                                colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                if (uiState.isCheckingApkUpdate) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = Color.White
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Memeriksa...", fontSize = 12.sp)
+                                } else {
+                                    Icon(
+                                        Icons.Rounded.SystemUpdate,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        "CEK UPDATE APK",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
+        // ── INFORMASI (Expandable) ─────────────────────────────────────────
         Card(
             shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(containerColor = Color.White),
-            border = BorderStroke(1.dp, CardBorder)
+            border = BorderStroke(1.dp, CardBorder),
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text("Lokasi Penyimpanan", fontWeight = FontWeight.Bold, color = SlateDark)
-                Text(
-                    text = "• Video: DCIM/Camera\n" +
-                        "• Foto / Slide: DCIM/Camera\n" +
-                        "• Audio MP3: Music/ElyReneDownloader",
-                    fontSize = 12.5.sp,
-                    color = SlateMuted,
-                    lineHeight = 19.sp
-                )
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { infoExpanded = !infoExpanded }
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Informasi",
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 15.sp,
+                        color = SlateDark
+                    )
+                    Icon(
+                        imageVector = if (infoExpanded) Icons.Rounded.ExpandMore else Icons.Rounded.ChevronRight,
+                        contentDescription = if (infoExpanded) "Tutup" else "Buka",
+                        tint = SlateMuted
+                    )
+                }
+
+                AnimatedVisibility(visible = infoExpanded) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                "Engine Downloader (yt-dlp + FFmpeg)",
+                                fontWeight = FontWeight.Bold,
+                                color = SlateDark,
+                                fontSize = 13.5.sp
+                            )
+                            val statusLabel = when (engineState) {
+                                EngineInitState.Loading -> "Sedang inisialisasi..."
+                                EngineInitState.Ready -> "✅ Aktif & Siap (On-Device)"
+                                is EngineInitState.Error -> "❌ Error: ${engineState.message}"
+                            }
+                            Text(statusLabel, fontSize = 12.5.sp, color = SlateMuted)
+
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = onUpdateYtDlp,
+                                    enabled = !uiState.isUpdatingYtDlp && engineState is EngineInitState.Ready,
+                                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    if (uiState.isUpdatingYtDlp) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            strokeWidth = 2.dp,
+                                            color = Color.White
+                                        )
+                                    } else {
+                                        Icon(
+                                            Icons.Rounded.Refresh,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Update yt-dlp", fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                if (engineState is EngineInitState.Error) {
+                                    OutlinedButton(onClick = onRetryInit, shape = RoundedCornerShape(8.dp)) {
+                                        Text("Inisialisasi Ulang", fontSize = 12.5.sp)
+                                    }
+                                }
+                            }
+
+                            uiState.engineUpdateMessage?.let { msg ->
+                                Text(
+                                    msg,
+                                    fontSize = 12.sp,
+                                    color = EmeraldPrimary,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                "Lokasi Penyimpanan",
+                                fontWeight = FontWeight.Bold,
+                                color = SlateDark,
+                                fontSize = 13.5.sp
+                            )
+                            Text(
+                                text = "• Video: DCIM/Camera\n" +
+                                    "• Foto / Slide: DCIM/Camera\n" +
+                                    "• Audio MP3: Music/ElyReneDownloader",
+                                fontSize = 12.5.sp,
+                                color = SlateMuted,
+                                lineHeight = 19.sp
+                            )
+                        }
+                    }
+                }
             }
         }
     }
