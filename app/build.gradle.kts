@@ -13,8 +13,8 @@ android {
         applicationId = "com.tikigsaver.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 3
-        versionName = "2.2"
+        versionCode = 4
+        versionName = "2.0.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -26,8 +26,21 @@ android {
         }
     }
 
+    signingConfigs {
+        create("consistent") {
+            storeFile = file("elyrene.keystore")
+            storePassword = "elyrenepass"
+            keyAlias = "elyrene"
+            keyPassword = "elyrenepass"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("consistent")
+        }
         release {
+            signingConfig = signingConfigs.getByName("consistent")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
