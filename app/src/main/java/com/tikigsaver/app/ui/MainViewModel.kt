@@ -58,7 +58,10 @@ data class MainUiState(
     val availableUpdateApkUrl: String? = null,
     val isDownloadingApkUpdate: Boolean = false,
     val apkDownloadProgress: Float = 0f,
-    val downloadedApkFile: File? = null
+    val apkDownloadedBytes: Long = 0L,
+    val apkTotalBytes: Long = 0L,
+    val downloadedApkFile: File? = null,
+    val isPreparingWaHd: Boolean = false
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -298,6 +301,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun prepareWhatsAppHd(edit: MyEditRecord, onReady: (File?) -> Unit) {
+        if (_uiState.value.isPreparingWaHd) return
+        val src = File(edit.filePath)
+        if (!src.exists()) {
+            onReady(null)
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isPreparingWaHd = true) }
+            val outFile = File(getApplication<Application>().cacheDir, "wa_status_hd.mp4")
+            val result = runCatching {
+                VideoEditorRepository.prepareWhatsAppHdStatus(getApplication(), src, outFile)
+            }.getOrNull()
+            _uiState.update { it.copy(isPreparingWaHd = false) }
+            onReady(result ?: src)
+        }
+    }
+
     fun checkApkUpdate(currentVersion: String, onMessage: (String) -> Unit) {
         if (_uiState.value.isCheckingApkUpdate) return
         viewModelScope.launch {
@@ -313,7 +334,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         if (!resp.isSuccessful) return@use null
                         val obj = JSONObject(resp.body?.string().orEmpty())
                         val tag = obj.optString("tag_name").trimStart('v', 'V').trim()
-                        val notes = obj.optString("body").ifBlank { "Versi terbaru tersedia." }
+                        val rawBody = if (obj.isNull("body")) "" else obj.optString("body").trim()
+                        val notes = rawBody.ifBlank {
+                            "Perubahan Update :\nQoL :\n1. memperkuat Status WA HD\n2. menambahkan MB di bar update\n3. Perubahan nama Update Sekarang jadi Update\n4. menambahkan info new update"
+                        }
                         val assets = obj.optJSONArray("assets")
                         var apkUrl = ""
                         if (assets != null) {
@@ -354,6 +378,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 availableUpdateApkUrl = null,
                 isDownloadingApkUpdate = false,
                 apkDownloadProgress = 0f,
+                apkDownloadedBytes = 0L,
+                apkTotalBytes = 0L,
                 downloadedApkFile = null
             )
         }
@@ -363,7 +389,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val url = _uiState.value.availableUpdateApkUrl ?: return
         if (_uiState.value.isDownloadingApkUpdate) return
         viewModelScope.launch {
-            _uiState.update { it.copy(isDownloadingApkUpdate = true, apkDownloadProgress = 0f) }
+            _uiState.update {
+                it.copy(
+                    isDownloadingApkUpdate = true,
+                    apkDownloadProgress = 0f,
+                    apkDownloadedBytes = 0L,
+                    apkTotalBytes = 0L
+                )
+            }
             val outFile = withContext(Dispatchers.IO) {
                 runCatching {
                     val dest = File(getApplication<Application>().cacheDir, "elyrene_update.apk")
@@ -373,18 +406,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
                         val body = resp.body ?: throw IllegalStateException("Empty body")
                         val total = body.contentLength()
+                        _uiState.update { it.copy(apkTotalBytes = total.coerceAtLeast(0L)) }
                         body.byteStream().use { input ->
                             FileOutputStream(dest).use { out ->
                                 val buf = ByteArray(16 * 1024)
                                 var readSum = 0L
+                                var lastUiEmit = 0L
                                 while (true) {
                                     val r = input.read(buf)
                                     if (r == -1) break
                                     out.write(buf, 0, r)
                                     readSum += r
-                                    if (total > 0) {
-                                        val pct = (readSum * 100f / total).coerceIn(0f, 100f)
-                                        _uiState.update { it.copy(apkDownloadProgress = pct) }
+                                    if (readSum - lastUiEmit >= 64 * 1024 || readSum == total) {
+                                        lastUiEmit = readSum
+                                        val pct = if (total > 0) (readSum * 100f / total).coerceIn(0f, 100f) else 0f
+                                        _uiState.update {
+                                            it.copy(
+                                                apkDownloadProgress = pct,
+                                                apkDownloadedBytes = readSum,
+                                                apkTotalBytes = total.coerceAtLeast(0L)
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -397,6 +439,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     isDownloadingApkUpdate = false,
                     apkDownloadProgress = if (outFile != null) 100f else 0f,
+                    apkDownloadedBytes = outFile?.length() ?: it.apkDownloadedBytes,
                     downloadedApkFile = outFile
                 )
             }

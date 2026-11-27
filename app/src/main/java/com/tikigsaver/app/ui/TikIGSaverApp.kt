@@ -171,6 +171,8 @@ fun TikIGSaverApp(viewModel: MainViewModel) {
             notes = uiState.availableUpdateNotes.orEmpty(),
             isDownloading = uiState.isDownloadingApkUpdate,
             progress = uiState.apkDownloadProgress,
+            downloadedBytes = uiState.apkDownloadedBytes,
+            totalBytes = uiState.apkTotalBytes,
             downloadedApkFile = uiState.downloadedApkFile,
             onUpdate = viewModel::startApkUpdateDownload,
             onDismiss = viewModel::dismissApkUpdate
@@ -279,10 +281,14 @@ fun TikIGSaverApp(viewModel: MainViewModel) {
                     )
                     2 -> MyEditTab(
                         edits = uiState.myEdits,
+                        isPreparingWaHd = uiState.isPreparingWaHd,
                         onSaveToGallery = { edit ->
                             viewModel.saveEditToGallery(edit) { msg ->
                                 scope.launch { snackbarHostState.showSnackbar(msg) }
                             }
+                        },
+                        onPrepareWaHd = { edit, onReady ->
+                            viewModel.prepareWhatsAppHd(edit, onReady)
                         },
                         onDelete = viewModel::removeEditItem,
                         onClearAll = viewModel::clearAllEdits
@@ -903,7 +909,9 @@ private fun InAppMediaPlayerDialog(
 @Composable
 private fun MyEditTab(
     edits: List<MyEditRecord>,
+    isPreparingWaHd: Boolean,
     onSaveToGallery: (MyEditRecord) -> Unit,
+    onPrepareWaHd: (MyEditRecord, (File?) -> Unit) -> Unit,
     onDelete: (String) -> Unit,
     onClearAll: () -> Unit
 ) {
@@ -915,6 +923,40 @@ private fun MyEditTab(
             item = item,
             onDismiss = { activeEdit = null }
         )
+    }
+
+    if (isPreparingWaHd) {
+        Dialog(onDismissRequest = {}) {
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White)
+            ) {
+                Row(
+                    modifier = Modifier.padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    CircularProgressIndicator(
+                        color = Color(0xFF25D366),
+                        modifier = Modifier.size(26.dp),
+                        strokeWidth = 3.dp
+                    )
+                    Column {
+                        Text(
+                            "Mengoptimalkan Status WA HD...",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = SlateDark
+                        )
+                        Text(
+                            "Menyesuaikan profil H.264 4.5 Mbps agar tidak pecah di WA",
+                            fontSize = 11.5.sp,
+                            color = SlateMuted
+                        )
+                    }
+                }
+            }
+        }
     }
 
     if (edits.isEmpty()) {
@@ -1091,30 +1133,33 @@ private fun MyEditTab(
                                 },
                                 onClick = {
                                     menuExpanded = false
-                                    if (editFile.exists()) {
-                                        runCatching {
-                                            val uri = FileProvider.getUriForFile(
-                                                context, "${context.packageName}.fileprovider", editFile
-                                            )
-                                            val waIntent = Intent(Intent.ACTION_SEND).apply {
-                                                type = "video/*"
-                                                putExtra(Intent.EXTRA_STREAM, uri)
-                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                                setPackage("com.whatsapp")
-                                            }
+                                    onPrepareWaHd(edit) { optimizedFile ->
+                                        val target = optimizedFile?.takeIf { it.exists() } ?: editFile
+                                        if (target.exists()) {
                                             runCatching {
-                                                context.startActivity(waIntent)
-                                            }.onFailure {
-                                                context.startActivity(
-                                                    Intent.createChooser(
-                                                        Intent(Intent.ACTION_SEND).apply {
-                                                            type = "video/*"
-                                                            putExtra(Intent.EXTRA_STREAM, uri)
-                                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                                        },
-                                                        "Kirim sebagai Status WA"
-                                                    )
+                                                val uri = FileProvider.getUriForFile(
+                                                    context, "${context.packageName}.fileprovider", target
                                                 )
+                                                val waIntent = Intent(Intent.ACTION_SEND).apply {
+                                                    type = "video/*"
+                                                    putExtra(Intent.EXTRA_STREAM, uri)
+                                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                                    setPackage("com.whatsapp")
+                                                }
+                                                runCatching {
+                                                    context.startActivity(waIntent)
+                                                }.onFailure {
+                                                    context.startActivity(
+                                                        Intent.createChooser(
+                                                            Intent(Intent.ACTION_SEND).apply {
+                                                                type = "video/*"
+                                                                putExtra(Intent.EXTRA_STREAM, uri)
+                                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                                            },
+                                                            "Kirim sebagai Status WA"
+                                                        )
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -1793,6 +1838,8 @@ private fun ApkUpdateDialog(
     notes: String,
     isDownloading: Boolean,
     progress: Float,
+    downloadedBytes: Long,
+    totalBytes: Long,
     downloadedApkFile: File?,
     onUpdate: () -> Unit,
     onDismiss: () -> Unit
@@ -1828,20 +1875,63 @@ private fun ApkUpdateDialog(
                         color = SlateDark
                     )
                 }
-                Text("Versi V $version siap diinstall.", fontSize = 13.sp, color = SlateMuted)
+                Text(
+                    "Update di temukan versi $version",
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = SlateDark
+                )
                 if (notes.isNotBlank()) {
-                    Text(notes.take(300), fontSize = 12.sp, color = SlateMuted)
+                    val displayNotes = if (notes.trim().startsWith("Perubahan Update", ignoreCase = true)) {
+                        notes.trim()
+                    } else {
+                        "Perubahan Update :\n${notes.trim()}"
+                    }
+                    Surface(
+                        color = Color(0xFFF8FAFC),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, CardBorder),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = displayNotes,
+                            fontSize = 12.sp,
+                            color = SlateMuted,
+                            lineHeight = 18.sp,
+                            modifier = Modifier
+                                .padding(10.dp)
+                                .verticalScroll(rememberScrollState())
+                        )
+                    }
                 }
 
                 when {
                     isDownloading -> {
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(
-                                "Mengunduh APK... ${progress.roundToInt()}%",
-                                fontSize = 12.sp,
-                                color = EmeraldPrimary,
-                                fontWeight = FontWeight.Medium
-                            )
+                        val dlMb = String.format(Locale.US, "%.1f", downloadedBytes / 1_048_576.0)
+                        val totMb = if (totalBytes > 0L) {
+                            String.format(Locale.US, "%.1f MB", totalBytes / 1_048_576.0)
+                        } else {
+                            "?"
+                        }
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "$dlMb MB / $totMb",
+                                    fontSize = 12.sp,
+                                    color = SlateDark,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "${progress.roundToInt()}%",
+                                    fontSize = 12.sp,
+                                    color = EmeraldPrimary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                             LinearProgressIndicator(
                                 progress = { progress / 100f },
                                 modifier = Modifier.fillMaxWidth(),
@@ -1895,7 +1985,7 @@ private fun ApkUpdateDialog(
                                 shape = RoundedCornerShape(8.dp),
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("Update Sekarang", fontWeight = FontWeight.Bold)
+                                Text("Update", fontWeight = FontWeight.Bold, maxLines = 1)
                             }
                         }
                     }

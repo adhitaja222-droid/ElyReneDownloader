@@ -4,16 +4,21 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import androidx.annotation.OptIn
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.Crop
+import androidx.media3.effect.Presentation
 import androidx.media3.transformer.Composition
+import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.Effects
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Transformer
+import androidx.media3.transformer.VideoEncoderSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -111,6 +116,58 @@ object VideoEditorRepository {
             val transformer = Transformer.Builder(context)
                 .setVideoMimeType(MimeTypes.VIDEO_H264)
                 .setAudioMimeType(MimeTypes.AUDIO_AAC)
+                .addListener(object : Transformer.Listener {
+                    override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                        if (cont.isActive) cont.resume(outputFile)
+                    }
+
+                    override fun onError(
+                        composition: Composition,
+                        exportResult: ExportResult,
+                        exportException: ExportException
+                    ) {
+                        if (cont.isActive) cont.resumeWithException(exportException)
+                    }
+                })
+                .build()
+
+            transformer.start(editedItem, outputFile.absolutePath)
+            cont.invokeOnCancellation { runCatching { transformer.cancel() } }
+        }
+    }
+
+    /**
+     * Mengoptimalkan video agar saat dikirim ke Status WhatsApp (Android) tidak di-kompres
+     * secara agresif / pecah (ala Pure Status): H.264 + AAC, max short-side 720p HD, bitrate ~4.5 Mbps.
+     */
+    @OptIn(UnstableApi::class)
+    suspend fun prepareWhatsAppHdStatus(
+        context: Context,
+        inputFile: File,
+        outputFile: File
+    ): File = withContext(Dispatchers.Main) {
+        outputFile.parentFile?.mkdirs()
+        if (outputFile.exists()) outputFile.delete()
+
+        val mediaItem = MediaItem.fromUri(Uri.fromFile(inputFile))
+        val effects = listOf<Effect>(Presentation.createForShortSide(720))
+        val editedItem = EditedMediaItem.Builder(mediaItem)
+            .setEffects(Effects(emptyList(), effects))
+            .build()
+
+        val encoderFactory = DefaultEncoderFactory.Builder(context)
+            .setRequestedVideoEncoderSettings(
+                VideoEncoderSettings.Builder()
+                    .setBitrate(4_500_000)
+                    .build()
+            )
+            .build()
+
+        suspendCancellableCoroutine { cont ->
+            val transformer = Transformer.Builder(context)
+                .setVideoMimeType(MimeTypes.VIDEO_H264)
+                .setAudioMimeType(MimeTypes.AUDIO_AAC)
+                .setEncoderFactory(encoderFactory)
                 .addListener(object : Transformer.Listener {
                     override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                         if (cont.isActive) cont.resume(outputFile)

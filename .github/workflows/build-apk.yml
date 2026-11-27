@@ -49,5 +49,12 @@ jobs:
         with:
           tag_name: v2.0.2
           name: ElyReneDownloader v2.0.2
+          body: |
+            Perubahan Update :
+            QoL :
+            1. memperkuat Status WA HD
+            2. menambahkan MB di bar update
+            3. Perubahan nama Update Sekarang jadi Update
+            4. menambahkan info new update
           files: app/build/outputs/apk/debug/app-debug.apk
           overwrite: true
