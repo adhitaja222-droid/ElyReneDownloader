@@ -4,11 +4,9 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.net.Uri
-import androidx.annotation.OptIn
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
-import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.Crop
 import androidx.media3.effect.Presentation
 import androidx.media3.transformer.Composition
@@ -19,6 +17,7 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Transformer
 import androidx.media3.transformer.VideoEncoderSettings
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -140,7 +139,7 @@ object VideoEditorRepository {
      * Mengoptimalkan video agar saat dikirim ke Status WhatsApp (Android) tidak di-kompres
      * secara agresif / pecah (ala Pure Status): H.264 + AAC, max short-side 720p HD, bitrate ~4.5 Mbps.
      */
-    @OptIn(UnstableApi::class)
+    @Suppress("UnsafeOptInUsageError")
     suspend fun prepareWhatsAppHdStatus(
         context: Context,
         inputFile: File,
@@ -149,8 +148,32 @@ object VideoEditorRepository {
         outputFile.parentFile?.mkdirs()
         if (outputFile.exists()) outputFile.delete()
 
+        val targetHeight = withContext(Dispatchers.IO) {
+            runCatching {
+                val mmr = MediaMetadataRetriever()
+                mmr.setDataSource(inputFile.absolutePath)
+                val w = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+                val h = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+                val rot = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+                mmr.release()
+                val dispW = if (rot == 90 || rot == 270) h else w
+                val dispH = if (rot == 90 || rot == 270) w else h
+                val shortSide = minOf(dispW, dispH)
+                if (shortSide > 720 && dispH > 0) {
+                    val scale = 720f / shortSide.toFloat()
+                    (((dispH * scale) / 2f).roundToInt() * 2).coerceAtLeast(360)
+                } else {
+                    0
+                }
+            }.getOrDefault(0)
+        }
+
         val mediaItem = MediaItem.fromUri(Uri.fromFile(inputFile))
-        val effects = listOf<Effect>(Presentation.createForShortSide(720))
+        val effects = if (targetHeight > 0) {
+            listOf<Effect>(Presentation.createForHeight(targetHeight))
+        } else {
+            emptyList()
+        }
         val editedItem = EditedMediaItem.Builder(mediaItem)
             .setEffects(Effects(emptyList(), effects))
             .build()
