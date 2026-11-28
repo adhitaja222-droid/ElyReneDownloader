@@ -13,7 +13,7 @@ android {
         applicationId = "com.tikigsaver.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 9
+        versionCode = 10
         versionName = "2.0.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -41,8 +41,8 @@ android {
         }
         release {
             signingConfig = signingConfigs.getByName("consistent")
-            isMinifyEnabled = true
-            isShrinkResources = true
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
