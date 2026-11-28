@@ -13,8 +13,8 @@ android {
         applicationId = "com.tikigsaver.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 12
-        versionName = "2.0.7"
+        versionCode = 13
+        versionName = "2.0.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

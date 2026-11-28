@@ -8,6 +8,8 @@ import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.effect.Crop
+import androidx.media3.effect.FrameDropEffect
+import androidx.media3.effect.Presentation
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
@@ -144,12 +146,82 @@ object VideoEditorRepository {
     }
 
     /**
-     * Mengirim video ke WhatsApp dengan RESOLUSI & KUALITAS ASLI 100% (tanpa downscale & tanpa kompresi ulang)
-     * agar tombol HD WhatsApp aktif saat dikirim ke Chat Sendiri -> Teruskan ke Status Saya.
+     * Profil khusus Status WA HD (ala Pure Status / Venlow):
+     * WhatsApp Status Android menghancurkan video ber-bitrate tinggi (> 3 Mbps) atau 60 FPS menjadi ~400kbps burik.
+     * Dengan pre-encode ke 1080p (maks shortSide 1080) + 30 FPS + 1.8 Mbps H.264/AAC (~2–4 MB),
+     * WhatsApp meloloskan video tanpa kompresi brutal sehingga status tetap jernih HD!
      */
+    @Suppress("UnsafeOptInUsageError")
     suspend fun prepareWhatsAppHdStatus(
         context: Context,
         inputFile: File,
         outputFile: File
-    ): File = inputFile
+    ): File = withContext(Dispatchers.Main) {
+        outputFile.parentFile?.mkdirs()
+        if (outputFile.exists()) outputFile.delete()
+
+        val targetHeight = withContext(Dispatchers.IO) {
+            runCatching {
+                val mmr = MediaMetadataRetriever()
+                mmr.setDataSource(inputFile.absolutePath)
+                val w = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+                val h = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+                val rot = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+                mmr.release()
+
+                val dispW = if (rot == 90 || rot == 270) h else w
+                val dispH = if (rot == 90 || rot == 270) w else h
+                val shortSide = minOf(dispW, dispH)
+                if (shortSide > 1080 && dispH > 0) {
+                    val scale = 1080f / shortSide.toFloat()
+                    (((dispH * scale) / 16f).toInt() * 16).coerceAtLeast(720)
+                } else {
+                    0
+                }
+            }.getOrDefault(0)
+        }
+
+        val mediaItem = MediaItem.fromUri(Uri.fromFile(inputFile))
+        val effects = mutableListOf<Effect>(
+            FrameDropEffect.createDefaultFrameDropEffect(30f)
+        )
+        if (targetHeight > 0) {
+            effects.add(Presentation.createForHeight(targetHeight))
+        }
+        val editedItem = EditedMediaItem.Builder(mediaItem)
+            .setEffects(Effects(emptyList(), effects))
+            .build()
+
+        val encoderFactory = DefaultEncoderFactory.Builder(context)
+            .setRequestedVideoEncoderSettings(
+                VideoEncoderSettings.Builder()
+                    .setBitrate(1_800_000)
+                    .build()
+            )
+            .build()
+
+        suspendCancellableCoroutine { cont ->
+            val transformer = Transformer.Builder(context)
+                .setVideoMimeType(MimeTypes.VIDEO_H264)
+                .setAudioMimeType(MimeTypes.AUDIO_AAC)
+                .setEncoderFactory(encoderFactory)
+                .addListener(object : Transformer.Listener {
+                    override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                        if (cont.isActive) cont.resume(outputFile)
+                    }
+
+                    override fun onError(
+                        composition: Composition,
+                        exportResult: ExportResult,
+                        exportException: ExportException
+                    ) {
+                        if (cont.isActive) cont.resumeWithException(exportException)
+                    }
+                })
+                .build()
+
+            transformer.start(editedItem, outputFile.absolutePath)
+            cont.invokeOnCancellation { runCatching { transformer.cancel() } }
+        }
+    }
 }

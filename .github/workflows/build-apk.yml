@@ -57,12 +57,12 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.0.7
-          name: ElyReneDownloader v2.0.7
+          tag_name: v2.0.8
+          name: ElyReneDownloader v2.0.8
           body: |
             Perubahan Update :
             QoL :
-            1. Kualitas Edit Video ditingkatkan ke 20 Mbps (resolusi & FPS asli 100% utuh)
-            2. Status WA (HD) kini mengirim file resolusi asli tanpa downscale/kompresi ulang agar siap pakai fitur HD Chat Sendiri -> Teruskan ke Status!
+            1. Profil Status WA (HD) baru ala Pure Status / Venlow: 1080p + 30 FPS + 1.8 Mbps H.264 (~2-4 MB) agar tidak memicu kompresor burik WhatsApp Status Android
+            2. Hasil Edit Video di My Edit tetap 20 Mbps resolusi & FPS asli
           files: app/build/outputs/apk/release/ElyReneDownloader.apk
           overwrite: true
