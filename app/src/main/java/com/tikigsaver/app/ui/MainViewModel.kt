@@ -83,10 +83,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
     init {
-        // Bersihkan sisa file APK update & cache WA HD agar memori HP tidak penuh
+        // Bersihkan semua sisa file APK update & cache sementara agar memori HP tidak menumpuk
         runCatching {
-            File(application.cacheDir, "elyrene_update.apk").takeIf { it.exists() }?.delete()
-            File(application.cacheDir, "wa_status_hd.mp4").takeIf { it.exists() }?.delete()
+            application.cacheDir.listFiles()?.forEach { f ->
+                if (f.isFile && (f.name.endsWith(".apk", true) || f.name.endsWith(".mp4", true) || f.name.endsWith(".tmp", true))) {
+                    f.delete()
+                }
+            }
+        }
+    }
+
+    fun clearAppCache(onDone: (String) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            var freedBytes = 0L
+            runCatching {
+                val cDir = getApplication<Application>().cacheDir
+                cDir.listFiles()?.forEach { f ->
+                    // Jangan hapus cache WebView agar session login WA Web tetap tersimpan
+                    if (!f.name.contains("WebView", ignoreCase = true)) {
+                        freedBytes += if (f.isDirectory) f.walkTopDown().sumOf { it.length() } else f.length()
+                        f.deleteRecursively()
+                    }
+                }
+            }
+            val mb = String.format(java.util.Locale.US, "%.1f MB", freedBytes / 1_048_576.0)
+            withContext(Dispatchers.Main) {
+                onDone("Cache dibersihkan ($mb ruang dikosongkan).")
+            }
         }
     }
 
@@ -322,6 +345,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val outFile = File(getApplication<Application>().cacheDir, "wa_status_hd.mp4")
             val result = runCatching {
                 VideoEditorRepository.prepareWhatsAppHdStatus(getApplication(), src, outFile)
+            }.getOrNull()
+            _uiState.update { it.copy(isPreparingWaHd = false) }
+            onReady(result ?: src)
+        }
+    }
+
+    fun prepareWhatsAppWebHd(edit: MyEditRecord, onReady: (File?) -> Unit) {
+        if (_uiState.value.isPreparingWaHd) return
+        val src = File(edit.filePath)
+        if (!src.exists()) {
+            onReady(null)
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isPreparingWaHd = true) }
+            val outFile = File(getApplication<Application>().cacheDir, "wa_web_status.mp4")
+            val result = runCatching {
+                VideoEditorRepository.prepareWhatsAppWebHdStatus(getApplication(), src, outFile)
             }.getOrNull()
             _uiState.update { it.copy(isPreparingWaHd = false) }
             onReady(result ?: src)

@@ -5,6 +5,11 @@ import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
 import android.net.Uri
+import android.webkit.CookieManager
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.MediaController
 import android.widget.VideoView
 import androidx.compose.animation.AnimatedVisibility
@@ -292,6 +297,9 @@ fun TikIGSaverApp(viewModel: MainViewModel) {
                         onPrepareWaHd = { edit, onReady ->
                             viewModel.prepareWhatsAppHd(edit, onReady)
                         },
+                        onPrepareWaWebHd = { edit, onReady ->
+                            viewModel.prepareWhatsAppWebHd(edit, onReady)
+                        },
                         onDelete = viewModel::removeEditItem,
                         onClearAll = viewModel::clearAllEdits
                     )
@@ -302,6 +310,11 @@ fun TikIGSaverApp(viewModel: MainViewModel) {
                         onRetryInit = viewModel::retryEngineInit,
                         onCheckUpdate = {
                             viewModel.checkApkUpdate(BuildConfig.VERSION_NAME) { msg ->
+                                scope.launch { snackbarHostState.showSnackbar(msg) }
+                            }
+                        },
+                        onClearCache = {
+                            viewModel.clearAppCache { msg ->
                                 scope.launch { snackbarHostState.showSnackbar(msg) }
                             }
                         }
@@ -914,16 +927,25 @@ private fun MyEditTab(
     isPreparingWaHd: Boolean,
     onSaveToGallery: (MyEditRecord) -> Unit,
     onPrepareWaHd: (MyEditRecord, (File?) -> Unit) -> Unit,
+    onPrepareWaWebHd: (MyEditRecord, (File?) -> Unit) -> Unit,
     onDelete: (String) -> Unit,
     onClearAll: () -> Unit
 ) {
     val context = LocalContext.current
     var activeEdit by remember { mutableStateOf<SavedMediaRecord?>(null) }
+    var waWebReadyFile by remember { mutableStateOf<File?>(null) }
 
     activeEdit?.let { item ->
         InAppMediaPlayerDialog(
             item = item,
             onDismiss = { activeEdit = null }
+        )
+    }
+
+    waWebReadyFile?.let { readyFile ->
+        WhatsAppWebStatusDialog(
+            readyFile = readyFile,
+            onDismiss = { waWebReadyFile = null }
         )
     }
 
@@ -1125,6 +1147,25 @@ private fun MyEditTab(
                                 }
                             )
                             DropdownMenuItem(
+                                text = { Text("Status WA Web (HD <10MB)", color = Color(0xFF0EA5E9), fontWeight = FontWeight.SemiBold) },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Rounded.Share,
+                                        contentDescription = null,
+                                        tint = Color(0xFF0EA5E9)
+                                    )
+                                },
+                                onClick = {
+                                    menuExpanded = false
+                                    onPrepareWaWebHd(edit) { ready ->
+                                        val target = ready?.takeIf { it.exists() } ?: editFile
+                                        if (target.exists()) {
+                                            waWebReadyFile = target
+                                        }
+                                    }
+                                }
+                            )
+                            DropdownMenuItem(
                                 text = { Text("Status WA (HD)", color = Color(0xFF25D366)) },
                                 leadingIcon = {
                                     Icon(
@@ -1189,6 +1230,113 @@ private fun MyEditTab(
     }
 }
 
+// ─── WHATSAPP WEB STATUS DIALOG ──────────────────────────────────────────────
+
+@Composable
+private fun WhatsAppWebStatusDialog(
+    readyFile: File,
+    onDismiss: () -> Unit
+) {
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SlateDark)
+                    .padding(horizontal = 6.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Rounded.Close, contentDescription = "Tutup", tint = Color.White)
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "WA Web Status (HD)",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
+                    Text(
+                        text = "Siap upload: ${formatBytes(readyFile.length())} • 60 FPS Utuh",
+                        color = Color(0xFF86EFAC),
+                        fontSize = 11.sp
+                    )
+                }
+                IconButton(onClick = { webViewRef?.reload() }) {
+                    Icon(Icons.Rounded.Refresh, contentDescription = "Muat Ulang", tint = Color.White)
+                }
+            }
+
+            Surface(
+                color = Color(0xFFECFDF5),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "1. Tautkan WA (pakai Kode/QR, sekali saja). 2. Buka tab Status → Pilih Video (otomatis pilih hasil edit) → Kirim!",
+                    fontSize = 11.5.sp,
+                    color = SlateDark,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    lineHeight = 16.sp
+                )
+            }
+
+            AndroidView(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                factory = { ctx ->
+                    WebView(ctx).apply {
+                        webViewRef = this
+                        CookieManager.getInstance().setAcceptCookie(true)
+                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                        settings.apply {
+                            javaScriptEnabled = true
+                            domStorageEnabled = true
+                            databaseEnabled = true
+                            allowFileAccess = true
+                            allowContentAccess = true
+                            useWideViewPort = true
+                            loadWithOverviewMode = true
+                            setSupportZoom(true)
+                            builtInZoomControls = true
+                            displayZoomControls = false
+                            userAgentString =
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                        }
+                        webViewClient = WebViewClient()
+                        webChromeClient = object : WebChromeClient() {
+                            override fun onShowFileChooser(
+                                webView: WebView?,
+                                filePathCallback: ValueCallback<Array<Uri>>?,
+                                fileChooserParams: FileChooserParams?
+                            ): Boolean {
+                                return if (readyFile.exists()) {
+                                    filePathCallback?.onReceiveValue(arrayOf(Uri.fromFile(readyFile)))
+                                    true
+                                } else {
+                                    filePathCallback?.onReceiveValue(null)
+                                    false
+                                }
+                            }
+                        }
+                        loadUrl("https://web.whatsapp.com")
+                    }
+                }
+            )
+        }
+    }
+}
+
 // ─── SETTINGS TAB ────────────────────────────────────────────────────────────
 
 @Composable
@@ -1197,7 +1345,8 @@ private fun SettingsTab(
     engineState: EngineInitState,
     onUpdateYtDlp: () -> Unit,
     onRetryInit: () -> Unit,
-    onCheckUpdate: () -> Unit
+    onCheckUpdate: () -> Unit,
+    onClearCache: () -> Unit
 ) {
     var versionExpanded by remember { mutableStateOf(false) }
     var infoExpanded by remember { mutableStateOf(false) }
@@ -1401,6 +1550,26 @@ private fun SettingsTab(
                                 fontSize = 12.5.sp,
                                 color = SlateMuted,
                                 lineHeight = 19.sp
+                            )
+                        }
+
+                        OutlinedButton(
+                            onClick = onClearCache,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                Icons.Rounded.Delete,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = SlateDark
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "Bersihkan Cache Sementara",
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = SlateDark
                             )
                         }
                     }

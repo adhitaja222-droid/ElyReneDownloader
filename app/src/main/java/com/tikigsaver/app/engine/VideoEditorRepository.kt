@@ -224,4 +224,92 @@ object VideoEditorRepository {
             cont.invokeOnCancellation { runCatching { transformer.cancel() } }
         }
     }
+
+    /**
+     * Profil khusus WhatsApp Web Status (< 10 MB, FPS asli 60 FPS tetap utuh!):
+     * - Jika file <= 9.5 MB: kirim langsung tanpa re-encode ulang (100% resolusi & 60 FPS asli!).
+     * - Jika > 9.5 MB: sesuaikan bitrate agar ukuran tepat ~8.8–9.2 MB (< batas 10 MB WA Web),
+     *   tanpa menurunkan FPS (60 FPS tetap 60 FPS) dan resolusi hingga 1080p.
+     */
+    @Suppress("UnsafeOptInUsageError")
+    suspend fun prepareWhatsAppWebHdStatus(
+        context: Context,
+        inputFile: File,
+        outputFile: File
+    ): File = withContext(Dispatchers.Main) {
+        if (inputFile.length() in 1L..9_500_000L) {
+            return@withContext inputFile
+        }
+
+        outputFile.parentFile?.mkdirs()
+        if (outputFile.exists()) outputFile.delete()
+
+        val (targetHeight, targetBitrate) = withContext(Dispatchers.IO) {
+            runCatching {
+                val mmr = MediaMetadataRetriever()
+                mmr.setDataSource(inputFile.absolutePath)
+                val w = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+                val h = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+                val rot = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+                val durMs = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 15_000L
+                mmr.release()
+
+                val dispW = if (rot == 90 || rot == 270) h else w
+                val dispH = if (rot == 90 || rot == 270) w else h
+                val shortSide = minOf(dispW, dispH)
+                val outH = if (shortSide > 1080 && dispH > 0) {
+                    val scale = 1080f / shortSide.toFloat()
+                    (((dispH * scale) / 2f).toInt() * 2).coerceAtLeast(720)
+                } else {
+                    0
+                }
+                val durSec = (durMs / 1000.0).coerceAtLeast(3.0)
+                val maxBySize = ((8_900_000.0 * 8.0) / durSec).toInt()
+                val br = maxBySize.coerceIn(2_000_000, 9_000_000)
+                outH to br
+            }.getOrDefault(0 to 4_500_000)
+        }
+
+        val mediaItem = MediaItem.fromUri(Uri.fromFile(inputFile))
+        val effects = if (targetHeight > 0) {
+            listOf<Effect>(Presentation.createForHeight(targetHeight))
+        } else {
+            emptyList()
+        }
+        val editedItem = EditedMediaItem.Builder(mediaItem)
+            .setEffects(Effects(emptyList(), effects))
+            .build()
+
+        val encoderFactory = DefaultEncoderFactory.Builder(context)
+            .setRequestedVideoEncoderSettings(
+                VideoEncoderSettings.Builder()
+                    .setBitrate(targetBitrate)
+                    .build()
+            )
+            .build()
+
+        suspendCancellableCoroutine { cont ->
+            val transformer = Transformer.Builder(context)
+                .setVideoMimeType(MimeTypes.VIDEO_H264)
+                .setAudioMimeType(MimeTypes.AUDIO_AAC)
+                .setEncoderFactory(encoderFactory)
+                .addListener(object : Transformer.Listener {
+                    override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                        if (cont.isActive) cont.resume(outputFile)
+                    }
+
+                    override fun onError(
+                        composition: Composition,
+                        exportResult: ExportResult,
+                        exportException: ExportException
+                    ) {
+                        if (cont.isActive) cont.resumeWithException(exportException)
+                    }
+                })
+                .build()
+
+            transformer.start(editedItem, outputFile.absolutePath)
+            cont.invokeOnCancellation { runCatching { transformer.cancel() } }
+        }
+    }
 }
