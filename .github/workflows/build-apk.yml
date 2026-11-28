@@ -47,13 +47,12 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.0.3
-          name: ElyReneDownloader v2.0.3
+          tag_name: v2.0.4
+          name: ElyReneDownloader v2.0.4
           body: |
             Perubahan Update :
             QoL :
-            1. Fix kotak crop Edit Video agar pas 100% di video asli tanpa area hitam
-            2. Perhitungan rasio crop 1:1, 3:4, 9:16, 16:9 presisi sesuai aspek rasio asli
-            3. Maksimalkan Status WA (HD) hingga 1080p bitrate 6.5-12 Mbps agar tajam tidak pecah
+            1. Tingkatkan kualitas simpan Edit Video ke 15 Mbps agar tajam mendekati asli
+            2. Status WA (HD) kini zero-reencode untuk file <=14.5 MB dan smart-cap <=13.8 MB agar tidak dikompres pecah oleh WhatsApp Android
           files: app/build/outputs/apk/debug/app-debug.apk
           overwrite: true

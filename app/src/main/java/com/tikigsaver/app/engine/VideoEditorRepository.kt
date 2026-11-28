@@ -111,10 +111,19 @@ object VideoEditorRepository {
             .setEffects(Effects(emptyList(), videoEffects))
             .build()
 
+        val encoderFactory = DefaultEncoderFactory.Builder(context)
+            .setRequestedVideoEncoderSettings(
+                VideoEncoderSettings.Builder()
+                    .setBitrate(15_000_000)
+                    .build()
+            )
+            .build()
+
         suspendCancellableCoroutine { cont ->
             val transformer = Transformer.Builder(context)
                 .setVideoMimeType(MimeTypes.VIDEO_H264)
                 .setAudioMimeType(MimeTypes.AUDIO_AAC)
+                .setEncoderFactory(encoderFactory)
                 .addListener(object : Transformer.Listener {
                     override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                         if (cont.isActive) cont.resume(outputFile)
@@ -136,9 +145,9 @@ object VideoEditorRepository {
     }
 
     /**
-     * Mengoptimalkan video agar saat dikirim ke Status WhatsApp (Android) tetap tajam HD & tidak pecah
-     * (ala Pure Status): pertahankan resolusi hingga 1080p HD (tidak diturunkan ke 720p) + H.264 High Bitrate
-     * dinamis (6.5–12 Mbps) + AAC agar WhatsApp Status tidak melakukan re-encode burik.
+     * Mengoptimalkan video agar saat dikirim ke Status WhatsApp (Android) tetap tajam HD & tidak pecah:
+     * - Jika ukuran <= 14.5 MB & resolusi <= 1080p: kirim langsung TANPA re-encode ulang (zero loss!).
+     * - Jika > 14.5 MB: sesuaikan ukuran di ~13.8 MB (3.5–5.8 Mbps) agar tidak memicu kompresor brutal >16MB WhatsApp.
      */
     @Suppress("UnsafeOptInUsageError")
     suspend fun prepareWhatsAppHdStatus(
@@ -146,10 +155,7 @@ object VideoEditorRepository {
         inputFile: File,
         outputFile: File
     ): File = withContext(Dispatchers.Main) {
-        outputFile.parentFile?.mkdirs()
-        if (outputFile.exists()) outputFile.delete()
-
-        val (targetHeight, targetBitrate) = withContext(Dispatchers.IO) {
+        val (needReencode, targetHeight, targetBitrate) = withContext(Dispatchers.IO) {
             runCatching {
                 val mmr = MediaMetadataRetriever()
                 mmr.setDataSource(inputFile.absolutePath)
@@ -162,18 +168,32 @@ object VideoEditorRepository {
                 val dispW = if (rot == 90 || rot == 270) h else w
                 val dispH = if (rot == 90 || rot == 270) w else h
                 val shortSide = minOf(dispW, dispH)
-                val outH = if (shortSide > 1080 && dispH > 0) {
-                    val scale = 1080f / shortSide.toFloat()
-                    (((dispH * scale) / 2f).roundToInt() * 2).coerceAtLeast(720)
+                val fileSize = inputFile.length()
+
+                if (fileSize in 1L..14_500_000L && shortSide <= 1080) {
+                    Triple(false, 0, 0)
                 } else {
-                    0
+                    val durSec = (durMs / 1000.0).coerceAtLeast(3.0)
+                    val maxShort = if (durSec <= 22.0) 1080 else 720
+                    val outH = if (shortSide > maxShort && dispH > 0) {
+                        val scale = maxShort.toFloat() / shortSide.toFloat()
+                        (((dispH * scale) / 2f).roundToInt() * 2).coerceAtLeast(720)
+                    } else {
+                        0
+                    }
+                    val maxBySize = ((13_800_000.0 * 8.0) / durSec).toInt()
+                    val br = maxBySize.coerceIn(3_500_000, 5_800_000)
+                    Triple(true, outH, br)
                 }
-                val durSec = (durMs / 1000.0).coerceAtLeast(3.0)
-                val maxBySize = ((25_000_000.0 * 8.0) / durSec).toInt()
-                val br = maxBySize.coerceIn(6_500_000, 12_000_000)
-                outH to br
-            }.getOrDefault(0 to 10_000_000)
+            }.getOrDefault(Triple(false, 0, 0))
         }
+
+        if (!needReencode) {
+            return@withContext inputFile
+        }
+
+        outputFile.parentFile?.mkdirs()
+        if (outputFile.exists()) outputFile.delete()
 
         val mediaItem = MediaItem.fromUri(Uri.fromFile(inputFile))
         val effects = if (targetHeight > 0) {
