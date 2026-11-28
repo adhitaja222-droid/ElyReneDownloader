@@ -136,8 +136,9 @@ object VideoEditorRepository {
     }
 
     /**
-     * Mengoptimalkan video agar saat dikirim ke Status WhatsApp (Android) tidak di-kompres
-     * secara agresif / pecah (ala Pure Status): H.264 + AAC, max short-side 720p HD, bitrate ~4.5 Mbps.
+     * Mengoptimalkan video agar saat dikirim ke Status WhatsApp (Android) tetap tajam HD & tidak pecah
+     * (ala Pure Status): pertahankan resolusi hingga 1080p HD (tidak diturunkan ke 720p) + H.264 High Bitrate
+     * dinamis (6.5–12 Mbps) + AAC agar WhatsApp Status tidak melakukan re-encode burik.
      */
     @Suppress("UnsafeOptInUsageError")
     suspend fun prepareWhatsAppHdStatus(
@@ -148,24 +149,30 @@ object VideoEditorRepository {
         outputFile.parentFile?.mkdirs()
         if (outputFile.exists()) outputFile.delete()
 
-        val targetHeight = withContext(Dispatchers.IO) {
+        val (targetHeight, targetBitrate) = withContext(Dispatchers.IO) {
             runCatching {
                 val mmr = MediaMetadataRetriever()
                 mmr.setDataSource(inputFile.absolutePath)
                 val w = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
                 val h = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
                 val rot = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+                val durMs = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 15_000L
                 mmr.release()
+
                 val dispW = if (rot == 90 || rot == 270) h else w
                 val dispH = if (rot == 90 || rot == 270) w else h
                 val shortSide = minOf(dispW, dispH)
-                if (shortSide > 720 && dispH > 0) {
-                    val scale = 720f / shortSide.toFloat()
-                    (((dispH * scale) / 2f).roundToInt() * 2).coerceAtLeast(360)
+                val outH = if (shortSide > 1080 && dispH > 0) {
+                    val scale = 1080f / shortSide.toFloat()
+                    (((dispH * scale) / 2f).roundToInt() * 2).coerceAtLeast(720)
                 } else {
                     0
                 }
-            }.getOrDefault(0)
+                val durSec = (durMs / 1000.0).coerceAtLeast(3.0)
+                val maxBySize = ((25_000_000.0 * 8.0) / durSec).toInt()
+                val br = maxBySize.coerceIn(6_500_000, 12_000_000)
+                outH to br
+            }.getOrDefault(0 to 10_000_000)
         }
 
         val mediaItem = MediaItem.fromUri(Uri.fromFile(inputFile))
@@ -181,7 +188,7 @@ object VideoEditorRepository {
         val encoderFactory = DefaultEncoderFactory.Builder(context)
             .setRequestedVideoEncoderSettings(
                 VideoEncoderSettings.Builder()
-                    .setBitrate(4_500_000)
+                    .setBitrate(targetBitrate)
                     .build()
             )
             .build()

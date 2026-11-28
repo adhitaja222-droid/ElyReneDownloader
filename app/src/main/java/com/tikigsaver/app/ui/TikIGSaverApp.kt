@@ -17,10 +17,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -1429,6 +1431,7 @@ private fun EditVideoDialog(
     var durationMs by remember { mutableStateOf(0L) }
     var startMs by remember { mutableStateOf(0L) }
     var endMs by remember { mutableStateOf(0L) }
+    var videoAspectRatio by remember { mutableFloatStateOf(9f / 16f) }
 
     var cropMode by remember { mutableStateOf("Asli") }
     var cropX by remember { mutableFloatStateOf(0f) }
@@ -1445,9 +1448,17 @@ private fun EditVideoDialog(
             else mmr.setDataSource(context, inputUri)
             val dur = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                 ?.toLongOrNull() ?: 0L
+            val vw = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+            val vh = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+            val rot = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
             mmr.release()
             durationMs = dur
             endMs = dur
+            val dispW = if (rot == 90 || rot == 270) vh else vw
+            val dispH = if (rot == 90 || rot == 270) vw else vh
+            if (dispW > 0 && dispH > 0) {
+                videoAspectRatio = (dispW.toFloat() / dispH.toFloat()).coerceIn(0.25f, 4f)
+            }
         }
         frames = VideoEditorRepository.extractTimelineFrames(inputUri, context, 10)
     }
@@ -1516,32 +1527,46 @@ private fun EditVideoDialog(
                 }
             }
 
-            // ── Video preview + crop overlay ──────────────────────────────
-            Box(
+            // ── Video preview + crop overlay (pas sesuai rasio video asli, tanpa area hitam) ──
+            BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
                     .background(Color(0xFF0A0A0A)),
                 contentAlignment = Alignment.Center
             ) {
-                if (thumbModel != null) {
-                    AsyncImage(
-                        model = thumbModel,
-                        contentDescription = "Preview",
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                val boxAspect = if (maxHeight.value > 0f) maxWidth.value / maxHeight.value else 1f
+                val videoBoxModifier = if (videoAspectRatio >= boxAspect) {
+                    Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(videoAspectRatio)
                 } else {
-                    Icon(
-                        Icons.Rounded.VideoFile,
-                        contentDescription = null,
-                        tint = Color(0xFF555555),
-                        modifier = Modifier.size(72.dp)
-                    )
+                    Modifier
+                        .fillMaxHeight()
+                        .aspectRatio(videoAspectRatio)
                 }
 
-                // Crop overlay — only when cropMode != "Asli"
-                if (cropMode != "Asli") {
+                Box(modifier = videoBoxModifier) {
+                    if (thumbModel != null) {
+                        AsyncImage(
+                            model = thumbModel,
+                            contentDescription = "Preview",
+                            contentScale = ContentScale.FillBounds,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Rounded.VideoFile,
+                                contentDescription = null,
+                                tint = Color(0xFF555555),
+                                modifier = Modifier.size(72.dp)
+                            )
+                        }
+                    }
+
+                    // Crop overlay — tepat seluas frame video asli
+                    if (cropMode != "Asli") {
                     var canvasSize by remember { mutableStateOf(Size.Zero) }
                     var dragHandle by remember { mutableStateOf(-1) }
 
@@ -1677,6 +1702,7 @@ private fun EditVideoDialog(
                         }
                     }
                 }
+                }
             }
 
             // ── Bottom controls ───────────────────────────────────────────
@@ -1797,23 +1823,24 @@ private fun EditVideoDialog(
                                         cropX = 0f; cropY = 0f; cropW = 1f; cropH = 1f
                                     }
                                     "Custom" -> { /* keep existing crop */ }
-                                    "1:1" -> {
-                                        val s = minOf(cropW, cropH).coerceAtMost(0.9f)
-                                        cropW = s; cropH = s
-                                        cropX = ((1f - s) / 2f).coerceIn(0f, 1f - s)
-                                        cropY = ((1f - s) / 2f).coerceIn(0f, 1f - s)
-                                    }
-                                    "3:4" -> {
-                                        cropW = 0.75f; cropH = 1f
-                                        cropX = 0.125f; cropY = 0f
-                                    }
-                                    "9:16" -> {
-                                        cropW = 0.5625f; cropH = 1f
-                                        cropX = 0.21875f; cropY = 0f
-                                    }
-                                    "16:9" -> {
-                                        cropW = 1f; cropH = 0.5625f
-                                        cropX = 0f; cropY = 0.21875f
+                                    else -> {
+                                        val targetAspect = when (mode) {
+                                            "1:1" -> 1f
+                                            "3:4" -> 3f / 4f
+                                            "9:16" -> 9f / 16f
+                                            "16:9" -> 16f / 9f
+                                            else -> videoAspectRatio
+                                        }
+                                        val normRatio = targetAspect / videoAspectRatio.coerceAtLeast(0.1f)
+                                        if (normRatio <= 1f) {
+                                            cropH = 1f
+                                            cropW = normRatio.coerceIn(0.1f, 1f)
+                                        } else {
+                                            cropW = 1f
+                                            cropH = (1f / normRatio).coerceIn(0.1f, 1f)
+                                        }
+                                        cropX = ((1f - cropW) / 2f).coerceIn(0f, 1f - cropW)
+                                        cropY = ((1f - cropH) / 2f).coerceIn(0f, 1f - cropH)
                                     }
                                 }
                             },

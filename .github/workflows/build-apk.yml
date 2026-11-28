@@ -47,14 +47,13 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.0.2
-          name: ElyReneDownloader v2.0.2
+          tag_name: v2.0.3
+          name: ElyReneDownloader v2.0.3
           body: |
             Perubahan Update :
             QoL :
-            1. memperkuat Status WA HD
-            2. menambahkan MB di bar update
-            3. Perubahan nama Update Sekarang jadi Update
-            4. menambahkan info new update
+            1. Fix kotak crop Edit Video agar pas 100% di video asli tanpa area hitam
+            2. Perhitungan rasio crop 1:1, 3:4, 9:16, 16:9 presisi sesuai aspek rasio asli
+            3. Maksimalkan Status WA (HD) hingga 1080p bitrate 6.5-12 Mbps agar tajam tidak pecah
           files: app/build/outputs/apk/debug/app-debug.apk
           overwrite: true
