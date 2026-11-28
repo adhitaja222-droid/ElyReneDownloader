@@ -8,6 +8,7 @@ import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.effect.Crop
+import androidx.media3.effect.FrameDropEffect
 import androidx.media3.effect.Presentation
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
@@ -145,9 +146,10 @@ object VideoEditorRepository {
     }
 
     /**
-     * Mengoptimalkan video agar saat dikirim ke Status WhatsApp (Android) tetap tajam HD & tidak pecah:
-     * - Jika ukuran <= 14.5 MB & resolusi <= 1080p: kirim langsung TANPA re-encode ulang (zero loss!).
-     * - Jika > 14.5 MB: sesuaikan ukuran di ~13.8 MB (3.5–5.8 Mbps) agar tidak memicu kompresor brutal >16MB WhatsApp.
+     * Mengoptimalkan video agar sesuai persis dengan batas passthrough Status WhatsApp Android (ala Pure Status):
+     * - Resolusi maksimal 720p (sisi terpendek 720px, tidak melebihi batas Status WA)
+     * - Frame rate diturunkan ke 30 FPS (via FrameDropEffect) agar tiap frame mendapat 2x bitrate & tidak dibantai WA
+     * - Bitrate optimal ~3.2 Mbps (ukuran selalu < 14 MB) + H.264 + AAC sehingga WA tidak melakukan kompresi ulang brutal.
      */
     @Suppress("UnsafeOptInUsageError")
     suspend fun prepareWhatsAppHdStatus(
@@ -155,7 +157,7 @@ object VideoEditorRepository {
         inputFile: File,
         outputFile: File
     ): File = withContext(Dispatchers.Main) {
-        val (needReencode, targetHeight, targetBitrate) = withContext(Dispatchers.IO) {
+        val (needReencode, targetHeight, targetBitrate, need30Fps) = withContext(Dispatchers.IO) {
             runCatching {
                 val mmr = MediaMetadataRetriever()
                 mmr.setDataSource(inputFile.absolutePath)
@@ -163,32 +165,36 @@ object VideoEditorRepository {
                 val h = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
                 val rot = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
                 val durMs = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 15_000L
+                val fps = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)?.toFloatOrNull() ?: 0f
+                val brMeta = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull() ?: 0
                 mmr.release()
 
                 val dispW = if (rot == 90 || rot == 270) h else w
                 val dispH = if (rot == 90 || rot == 270) w else h
                 val shortSide = minOf(dispW, dispH)
                 val fileSize = inputFile.length()
+                val durSec = (durMs / 1000.0).coerceAtLeast(3.0)
+                val avgBitrate = if (brMeta > 0) brMeta else ((fileSize * 8.0) / durSec).toInt()
+                val highFps = fps > 33f || avgBitrate > 4_500_000
 
-                if (fileSize in 1L..14_500_000L && shortSide <= 1080) {
-                    Triple(false, 0, 0)
+                // Hanya skip re-encode jika video SUDAH <=720p, <=3.8 Mbps, <=12 MB, dan bukan 60fps
+                if (fileSize in 1L..12_000_000L && shortSide in 1..720 && avgBitrate <= 3_800_000 && fps <= 33f) {
+                    listOf(0, 0, 0, 0)
                 } else {
-                    val durSec = (durMs / 1000.0).coerceAtLeast(3.0)
-                    val maxShort = if (durSec <= 22.0) 1080 else 720
-                    val outH = if (shortSide > maxShort && dispH > 0) {
-                        val scale = maxShort.toFloat() / shortSide.toFloat()
-                        (((dispH * scale) / 2f).roundToInt() * 2).coerceAtLeast(720)
+                    val outH = if (shortSide > 720 && dispH > 0) {
+                        val scale = 720f / shortSide.toFloat()
+                        (((dispH * scale) / 16f).roundToInt() * 16).coerceAtLeast(360)
                     } else {
                         0
                     }
-                    val maxBySize = ((13_800_000.0 * 8.0) / durSec).toInt()
-                    val br = maxBySize.coerceIn(3_500_000, 5_800_000)
-                    Triple(true, outH, br)
+                    val maxBySize = ((13_000_000.0 * 8.0) / durSec).toInt()
+                    val br = maxBySize.coerceIn(2_400_000, 3_400_000)
+                    listOf(1, outH, br, if (highFps) 1 else 0)
                 }
-            }.getOrDefault(Triple(false, 0, 0))
+            }.getOrDefault(listOf(1, 0, 3_200_000, 1))
         }
 
-        if (!needReencode) {
+        if (needReencode == 0) {
             return@withContext inputFile
         }
 
@@ -196,10 +202,12 @@ object VideoEditorRepository {
         if (outputFile.exists()) outputFile.delete()
 
         val mediaItem = MediaItem.fromUri(Uri.fromFile(inputFile))
-        val effects = if (targetHeight > 0) {
-            listOf<Effect>(Presentation.createForHeight(targetHeight))
-        } else {
-            emptyList()
+        val effects = mutableListOf<Effect>()
+        if (need30Fps == 1) {
+            effects.add(FrameDropEffect.createDefaultFrameDropEffect(30f))
+        }
+        if (targetHeight > 0) {
+            effects.add(Presentation.createForHeight(targetHeight))
         }
         val editedItem = EditedMediaItem.Builder(mediaItem)
             .setEffects(Effects(emptyList(), effects))

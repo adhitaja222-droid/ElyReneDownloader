@@ -57,12 +57,11 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.0.5
-          name: ElyReneDownloader v2.0.5
+          tag_name: v2.0.6
+          name: ElyReneDownloader v2.0.6
           body: |
             Perubahan Update :
             QoL :
-            1. Ukuran APK kini ramping (~53 MB) hanya dalam 1 file ElyReneDownloader.apk
-            2. Otomatis hapus file installer APK bekas update setelah aplikasi dibuka agar memori HP tidak penuh
+            1. Optimasi Status WA (HD) ke profil presisi WhatsApp Status Android (720p kelipatan 16 + 30 FPS via FrameDropEffect + 2.4-3.4 Mbps < 13 MB) agar tidak terkena kompresi pecah WhatsApp
           files: app/build/outputs/apk/release/ElyReneDownloader.apk
           overwrite: true
