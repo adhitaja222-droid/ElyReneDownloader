@@ -13,16 +13,21 @@ android {
         applicationId = "com.tikigsaver.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 7
-        versionName = "2.0.4"
+        versionCode = 8
+        versionName = "2.0.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
         }
+    }
 
-        ndk {
-            abiFilters.addAll(setOf("armeabi-v7a", "arm64-v8a"))
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("armeabi-v7a", "arm64-v8a")
+            isUniversalApk = false
         }
     }
 

@@ -1,2 +1,10 @@
 -keep class com.yausername.youtubedl_android.** { *; }
 -dontwarn com.yausername.youtubedl_android.**
+-keep class com.yausername.ffmpeg.** { *; }
+-dontwarn com.yausername.ffmpeg.**
+-keep class com.tikigsaver.app.model.** { *; }
+-dontwarn okhttp3.**
+-dontwarn okio.**
+-dontwarn org.conscrypt.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.openjsse.**

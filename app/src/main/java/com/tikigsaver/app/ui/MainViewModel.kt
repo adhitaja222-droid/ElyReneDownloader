@@ -3,6 +3,7 @@ package com.tikigsaver.app.ui
 import android.app.Application
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.tikigsaver.app.TikIGApp
@@ -80,6 +81,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     )
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
+
+    init {
+        // Bersihkan sisa file APK update & cache WA HD agar memori HP tidak penuh
+        runCatching {
+            File(application.cacheDir, "elyrene_update.apk").takeIf { it.exists() }?.delete()
+            File(application.cacheDir, "wa_status_hd.mp4").takeIf { it.exists() }?.delete()
+        }
+    }
 
     private fun saveHistoryToPrefs(list: List<SavedMediaRecord>) {
         val arr = JSONArray()
@@ -340,16 +349,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                         val assets = obj.optJSONArray("assets")
                         var apkUrl = ""
+                        var fallbackApkUrl = ""
+                        val primaryAbi = Build.SUPPORTED_ABIS.firstOrNull().orEmpty()
                         if (assets != null) {
                             for (i in 0 until assets.length()) {
                                 val a = assets.optJSONObject(i) ?: continue
                                 val name = a.optString("name")
                                 if (name.endsWith(".apk", ignoreCase = true)) {
-                                    apkUrl = a.optString("browser_download_url")
-                                    break
+                                    val dl = a.optString("browser_download_url")
+                                    if (fallbackApkUrl.isBlank()) fallbackApkUrl = dl
+                                    if (primaryAbi.isNotBlank() && name.contains(primaryAbi, ignoreCase = true)) {
+                                        apkUrl = dl
+                                        break
+                                    }
                                 }
                             }
                         }
+                        if (apkUrl.isBlank()) apkUrl = fallbackApkUrl
                         Triple(tag, notes, apkUrl)
                     }
                 }.getOrNull()

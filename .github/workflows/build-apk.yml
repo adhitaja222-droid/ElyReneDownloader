@@ -34,25 +34,25 @@ jobs:
       - name: Run unit tests
         run: gradle testDebugUnitTest --stacktrace
 
-      - name: Build Debug APK
-        run: gradle assembleDebug --stacktrace
+      - name: Build Release APK (Split ABI)
+        run: gradle assembleRelease --stacktrace
 
-      - name: Upload Debug APK Artifact
+      - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ElyReneDownloader-APK
-          path: app/build/outputs/apk/debug/*.apk
+          path: app/build/outputs/apk/release/*.apk
 
       - name: Publish APK to GitHub Release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.0.4
-          name: ElyReneDownloader v2.0.4
+          tag_name: v2.0.5
+          name: ElyReneDownloader v2.0.5
           body: |
             Perubahan Update :
             QoL :
-            1. Tingkatkan kualitas simpan Edit Video ke 15 Mbps agar tajam mendekati asli
-            2. Status WA (HD) kini zero-reencode untuk file <=14.5 MB dan smart-cap <=13.8 MB agar tidak dikompres pecah oleh WhatsApp Android
-          files: app/build/outputs/apk/debug/app-debug.apk
+            1. Split APK per arsitektur CPU (arm64-v8a / armeabi-v7a) + Release minify agar ukuran download update jauh lebih kecil (~50% lebih ringan!)
+            2. Otomatis hapus file installer APK bekas update setelah aplikasi dibuka agar memori HP tidak penuh
+          files: app/build/outputs/apk/release/*.apk
           overwrite: true
